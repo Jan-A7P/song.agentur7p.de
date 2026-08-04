@@ -9,59 +9,11 @@ import {
     type ReactNode,
 } from 'react';
 import axios from 'axios';
-import api from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
-import { hasMusicConnected } from '@/lib/music';
+import { activeProviderId, hasMusicConnected } from '@/lib/music';
+import { getActiveProvider, type MusicProvider, type PlayableTrack, type ProviderPlaybackState } from '@/music';
 
-declare global {
-    interface Window {
-        onSpotifyWebPlaybackSDKReady: () => void;
-        Spotify: {
-            Player: new (options: {
-                name: string;
-                getOAuthToken: (cb: (token: string) => void) => void;
-                volume?: number;
-            }) => SpotifyPlayerInstance;
-        };
-    }
-}
-
-type SpotifyPlayerInstance = {
-    connect: () => Promise<boolean>;
-    disconnect: () => void;
-    addListener: (event: string, cb: (payload: any) => void) => boolean;
-    removeListener: (event: string, cb?: (payload: any) => void) => boolean;
-    pause: () => Promise<void>;
-    resume: () => Promise<void>;
-    togglePlay: () => Promise<void>;
-    setVolume: (volume: number) => Promise<void>;
-    getVolume: () => Promise<number>;
-    seek: (positionMs: number) => Promise<void>;
-    getCurrentState: () => Promise<SpotifyPlaybackState | null>;
-};
-
-type SpotifyPlaybackState = {
-    paused: boolean;
-    position: number;
-    duration: number;
-    track_window: {
-        current_track: {
-            name: string;
-            uri: string;
-            artists: { name: string }[];
-            album: { images: { url: string }[] };
-        } | null;
-    };
-};
-
-export type PlayerTrack = {
-    uri: string;
-    title: string;
-    artist: string;
-    albumArtUrl: string | null;
-    songId?: number;
-    lyrics?: string | null;
-};
+export type PlayerTrack = PlayableTrack;
 
 type QueueState = {
     playlistId: number | null;
@@ -95,6 +47,7 @@ type PlayerContextValue = {
     toggleRepeatOne: () => void;
     setControlsLocked: (locked: boolean) => void;
     syncFromRemote: (payload: {
+        provider?: string | null;
         uri: string | null;
         title?: string | null;
         artist?: string | null;
@@ -127,12 +80,22 @@ function readStoredSession(): StoredSession | null {
         if (!raw) {
             return null;
         }
-        const parsed = JSON.parse(raw) as StoredSession;
+        const parsed = JSON.parse(raw) as StoredSession & { track: PlayerTrack & { provider?: string; trackId?: string } };
         if (!parsed?.track?.uri) {
             return null;
         }
+        const track: PlayerTrack = {
+            provider: (parsed.track.provider as PlayerTrack['provider']) || 'spotify',
+            trackId: parsed.track.trackId || parsed.track.uri.split(':').pop() || '',
+            uri: parsed.track.uri,
+            title: parsed.track.title,
+            artist: parsed.track.artist,
+            albumArtUrl: parsed.track.albumArtUrl ?? null,
+            songId: parsed.track.songId,
+            lyrics: parsed.track.lyrics,
+        };
         return {
-            track: parsed.track,
+            track,
             positionMs: Math.max(0, Number(parsed.positionMs) || 0),
             durationMs: Math.max(0, Number(parsed.durationMs) || 0),
             queue: parsed.queue ?? null,
@@ -220,33 +183,20 @@ function sequentialIndices(length: number): number[] {
     return Array.from({ length }, (_, i) => i);
 }
 
-function loadSdk(): Promise<void> {
-    if (window.Spotify) {
-        return Promise.resolve();
-    }
-
-    return new Promise((resolve, reject) => {
-        const existing = document.getElementById('spotify-player-sdk');
-        if (existing) {
-            window.onSpotifyWebPlaybackSDKReady = () => resolve();
-            return;
-        }
-
-        window.onSpotifyWebPlaybackSDKReady = () => resolve();
-        const script = document.createElement('script');
-        script.id = 'spotify-player-sdk';
-        script.src = 'https://sdk.scdn.co/spotify-player.js';
-        script.async = true;
-        script.onerror = () => reject(new Error('Spotify SDK konnte nicht geladen werden.'));
-        document.body.appendChild(script);
-    });
+function normalizeTrack(track: PlayerTrack): PlayerTrack {
+    return {
+        ...track,
+        provider: track.provider || 'spotify',
+        trackId: track.trackId || track.uri.split(':').pop() || '',
+    };
 }
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
     const { user } = useAuth();
-    const spotifyConnected = hasMusicConnected(user);
-    const playerRef = useRef<SpotifyPlayerInstance | null>(null);
-    const deviceIdRef = useRef<string | null>(null);
+    const musicConnected = hasMusicConnected(user);
+    const providerId = activeProviderId(user);
+    const providerRef = useRef<MusicProvider | null>(null);
+
     const positionAnchorRef = useRef<{ position: number; at: number; playing: boolean }>({
         position: 0,
         at: Date.now(),
@@ -265,7 +215,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const syncingRemoteRef = useRef(false);
 
     const [track, setTrack] = useState<PlayerTrack | null>(null);
-    const [spotifyReady, setSpotifyReady] = useState(false);
+    const [providerReady, setProviderReady] = useState(false);
     const [playing, setPlaying] = useState(false);
     const [positionMs, setPositionMs] = useState(0);
     const [durationMs, setDurationMs] = useState(0);
@@ -277,7 +227,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const [controlsLocked, setControlsLocked] = useState(false);
     const volumeRef = useRef(volume);
 
-    const ready = spotifyConnected && spotifyReady;
+    const ready = musicConnected && providerReady;
 
     useEffect(() => {
         volumeRef.current = volume;
@@ -307,12 +257,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         shuffleRef.current = shuffle;
     }, [shuffle]);
 
-    const getToken = useCallback(async () => {
-        const { data } = await api.get<{ access_token: string }>('/spotify/token');
-        return data.access_token;
-    }, []);
-
-    const applyState = useCallback((state: SpotifyPlaybackState | null) => {
+    const applyState = useCallback((state: ProviderPlaybackState | null) => {
         if (!state) {
             return;
         }
@@ -320,7 +265,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const guard = resumeGuardRef.current;
         const statePosition = state.position;
         if (guard && Date.now() < guard.until && statePosition + 1500 < guard.minPosition) {
-            // Ignore transient 0:00 updates right after resume-from-position
             setPlaying(!state.paused);
             if (state.duration > 0) {
                 setDurationMs(state.duration);
@@ -343,26 +287,27 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setPositionMs(statePosition);
         setDurationMs(state.duration);
 
-        const current = state.track_window.current_track;
+        const current = state.track;
         if (current) {
             setTrack((prev) => ({
+                provider: prev?.provider || providerId || 'spotify',
+                trackId: prev?.uri === current.uri ? prev.trackId : current.uri.split(':').pop() || '',
                 uri: current.uri,
                 title: current.name,
-                artist: current.artists.map((a) => a.name).join(', '),
-                albumArtUrl: current.album.images[1]?.url ?? current.album.images[0]?.url ?? prev?.albumArtUrl ?? null,
+                artist: current.artists.join(', '),
+                albumArtUrl: current.albumArtUrl ?? prev?.albumArtUrl ?? null,
                 songId: prev?.uri === current.uri ? prev?.songId : prev?.songId,
                 lyrics: prev?.uri === current.uri ? prev?.lyrics : prev?.lyrics,
             }));
         }
-    }, []);
+    }, [providerId]);
 
     useEffect(() => {
-        if (!spotifyConnected) {
+        if (!musicConnected || !providerId) {
             restoredRef.current = false;
-            playerRef.current?.disconnect();
-            playerRef.current = null;
-            deviceIdRef.current = null;
-            setSpotifyReady(false);
+            providerRef.current?.disconnect();
+            providerRef.current = null;
+            setProviderReady(false);
             setPlaying(false);
             setTrack(null);
             setQueue(null);
@@ -371,55 +316,28 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             return;
         }
 
+        const provider = getActiveProvider(providerId);
+        if (!provider) {
+            return;
+        }
+
+        providerRef.current = provider;
+        const unsubState = provider.onStateChange(applyState);
+        const unsubReady = provider.onReadyChange((isReady) => {
+            setProviderReady(isReady);
+            if (isReady) {
+                setError(null);
+            }
+        });
+        const unsubError = provider.onError((message) => setError(message));
+
         let cancelled = false;
-
-        (async () => {
+        void (async () => {
             try {
-                await loadSdk();
-                if (cancelled || playerRef.current) {
-                    return;
-                }
-
-                const player = new window.Spotify.Player({
-                    name: 'Songtexte Player',
-                    getOAuthToken: (cb) => {
-                        void getToken()
-                            .then((token) => cb(token))
-                            .catch(() => setError('Spotify-Token konnte nicht geladen werden.'));
-                    },
-                    volume: volumeRef.current,
-                });
-
-                player.addListener('ready', ({ device_id }: { device_id: string }) => {
-                    deviceIdRef.current = device_id;
-                    setSpotifyReady(true);
-                    setError(null);
-                    void player.setVolume(volumeRef.current);
-                });
-
-                player.addListener('not_ready', () => {
-                    setSpotifyReady(false);
-                });
-
-                player.addListener('player_state_changed', (state: SpotifyPlaybackState | null) => {
-                    applyState(state);
-                });
-
-                player.addListener('initialization_error', ({ message }: { message: string }) => {
-                    setError(message);
-                });
-
-                player.addListener('authentication_error', ({ message }: { message: string }) => {
-                    setError(message || 'Spotify-Auth fehlgeschlagen. Premium erforderlich.');
-                });
-
-                player.addListener('account_error', ({ message }: { message: string }) => {
-                    setError(message || 'Spotify Premium erforderlich.');
-                });
-
-                const connected = await player.connect();
-                if (!cancelled && connected) {
-                    playerRef.current = player;
+                await provider.setVolume(volumeRef.current);
+                await provider.connect();
+                if (!cancelled) {
+                    setProviderReady(provider.ready);
                 }
             } catch (e) {
                 if (!cancelled) {
@@ -430,13 +348,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
         return () => {
             cancelled = true;
-            playerRef.current?.disconnect();
-            playerRef.current = null;
-            deviceIdRef.current = null;
-            setSpotifyReady(false);
+            unsubState();
+            unsubReady();
+            unsubError();
+            provider.disconnect();
+            if (providerRef.current === provider) {
+                providerRef.current = null;
+            }
+            setProviderReady(false);
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [spotifyConnected, getToken, applyState]);
+    }, [musicConnected, providerId, applyState]);
 
     useEffect(() => {
         const timer = window.setInterval(() => {
@@ -451,56 +372,44 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return () => window.clearInterval(timer);
     }, [durationMs]);
 
-    const playSpotifyEngine = useCallback(
-        async (next: PlayerTrack, startAt: number) => {
-            if (!next.uri.startsWith('spotify:')) {
-                throw new Error('Ungültige Spotify-URI.');
-            }
-            if (!deviceIdRef.current) {
-                throw new Error('Spotify Player ist noch nicht bereit.');
-            }
+    const playEngine = useCallback(async (next: PlayerTrack, startAt: number) => {
+        const provider = providerRef.current;
+        if (!provider) {
+            throw new Error('Musik-Player ist noch nicht bereit.');
+        }
 
-            if (startAt > 0) {
-                resumeGuardRef.current = {
-                    until: Date.now() + 2500,
-                    minPosition: startAt,
-                };
-            } else {
-                resumeGuardRef.current = null;
-            }
+        if (startAt > 0) {
+            resumeGuardRef.current = {
+                until: Date.now() + 2500,
+                minPosition: startAt,
+            };
+        } else {
+            resumeGuardRef.current = null;
+        }
 
-            await api.post('/spotify/play', {
-                uri: next.uri,
-                device_id: deviceIdRef.current,
-                position_ms: startAt > 0 ? startAt : undefined,
-            });
-
-            if (startAt > 0 && playerRef.current) {
-                await playerRef.current.seek(startAt);
-            }
-        },
-        [],
-    );
+        await provider.play(normalizeTrack(next), startAt);
+    }, []);
 
     const playTrackInternal = useCallback(
         async (next: PlayerTrack, options?: { startPositionMs?: number }) => {
-            if (!spotifyConnected) {
-                setError('Bitte Spotify in den Einstellungen verbinden.');
+            if (!musicConnected) {
+                setError('Bitte einen Musikdienst in den Einstellungen verbinden.');
                 return;
             }
 
-            if (!next.uri.startsWith('spotify:')) {
-                setError('Nur Spotify-Tracks können abgespielt werden.');
+            const normalized = normalizeTrack(next);
+            if (!normalized.uri) {
+                setError('Track hat keine abspielbare URI.');
                 return;
             }
 
             const startAt = Math.max(0, Math.floor(options?.startPositionMs ?? 0));
 
-            setTrack(next);
+            setTrack(normalized);
             setError(null);
 
             try {
-                await playSpotifyEngine(next, startAt);
+                await playEngine(normalized, startAt);
 
                 setPlaying(true);
                 positionAnchorRef.current = { position: startAt, at: Date.now(), playing: true };
@@ -510,7 +419,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 }
             } catch (err) {
                 resumeGuardRef.current = null;
-                let message = 'Wiedergabe fehlgeschlagen. Ist Spotify Premium aktiv?';
+                let message = 'Wiedergabe fehlgeschlagen.';
                 if (axios.isAxiosError(err)) {
                     const data = err.response?.data as
                         | { message?: string; errors?: Record<string, string[]> }
@@ -523,7 +432,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 setError(message);
             }
         },
-        [spotifyConnected, playSpotifyEngine],
+        [musicConnected, playEngine],
     );
 
     const playTrack = useCallback(
@@ -552,7 +461,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             tracks: PlayerTrack[],
             options?: { playlistId?: number; startIndex?: number; shuffle?: boolean },
         ) => {
-            const playable = tracks.filter((t) => Boolean(t.uri));
+            const playable = tracks.filter((t) => Boolean(t.uri)).map(normalizeTrack);
             if (playable.length === 0) {
                 setError('Keine abspielbaren Tracks in der Playlist.');
                 return;
@@ -575,8 +484,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 ? Math.min(Math.max(options.startIndex as number, 0), playable.length - 1)
                 : 0;
 
-            // When shuffling a full playlist (no specific start song), fully randomize —
-            // do not pin track 0 as the first item.
             const order = useShuffle
                 ? shuffleIndices(playable.length, hasStartIndex ? startIndex : undefined)
                 : sequentialIndices(playable.length);
@@ -617,7 +524,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
 
         if (positionAnchorRef.current.position > 3000) {
-            await playerRef.current?.seek(0);
+            await providerRef.current?.seek(0);
             positionAnchorRef.current = { position: 0, at: Date.now(), playing: positionAnchorRef.current.playing };
             setPositionMs(0);
             return;
@@ -645,7 +552,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        // End of rotation
         if (shuffleRef.current) {
             const order = shuffleIndices(currentQueue.tracks.length);
             await playAtCursor({ ...currentQueue, order, cursor: 0 });
@@ -660,21 +566,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        const player = playerRef.current;
-        if (!player) {
+        const provider = providerRef.current;
+        if (!provider) {
             return;
         }
 
-        if (!playing && track && deviceIdRef.current) {
+        if (!playing && track) {
             const resumeAt = Math.max(
                 0,
                 Math.floor(positionMsRef.current || positionAnchorRef.current.position || positionMs || 0),
             );
-            const state = await player.getCurrentState();
-            const currentUri = state?.track_window.current_track?.uri;
+            const state = await provider.getCurrentState();
+            const currentUri = state?.track?.uri;
             const statePosition = state?.position ?? 0;
 
-            // After reload Spotify has no active track / wrong position → restart at saved offset.
             if (!state || currentUri !== track.uri || (resumeAt > 1500 && statePosition + 2000 < resumeAt)) {
                 await playTrackInternal(track, { startPositionMs: resumeAt });
                 return;
@@ -685,12 +590,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                     until: Date.now() + 2500,
                     minPosition: resumeAt,
                 };
-                await player.seek(resumeAt);
+                await provider.seek(resumeAt);
                 positionAnchorRef.current = { position: resumeAt, at: Date.now(), playing: true };
                 setPositionMs(resumeAt);
             }
 
-            await player.resume();
+            await provider.resume();
             setPlaying(true);
             positionAnchorRef.current = {
                 position: resumeAt > 0 ? resumeAt : positionAnchorRef.current.position || statePosition,
@@ -701,7 +606,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
 
         if (playing) {
-            await player.pause();
+            await provider.pause();
             const pausedAt = positionMsRef.current || positionMs;
             setPlaying(false);
             positionAnchorRef.current = {
@@ -718,7 +623,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             return;
         }
         const clamped = Math.max(0, Math.min(nextPositionMs, durationMs || nextPositionMs));
-        await playerRef.current?.seek(clamped);
+        await providerRef.current?.seek(clamped);
         positionAnchorRef.current = {
             position: clamped,
             at: Date.now(),
@@ -729,6 +634,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
     const syncFromRemote = useCallback(
         async (payload: {
+            provider?: string | null;
             uri: string | null;
             title?: string | null;
             artist?: string | null;
@@ -737,9 +643,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             positionMs: number;
             isPlaying: boolean;
         }) => {
+            const provider = providerRef.current;
+
             if (!payload.uri) {
-                if (playerRef.current && playing) {
-                    await playerRef.current.pause();
+                if (provider && playing) {
+                    await provider.pause();
                 }
                 setPlaying(false);
                 setPositionMs(0);
@@ -748,6 +656,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             }
 
             const nextTrack: PlayerTrack = {
+                provider: (payload.provider as PlayerTrack['provider']) || track?.provider || 'spotify',
+                trackId: payload.uri.split(':').pop() || '',
                 uri: payload.uri,
                 title: payload.title || track?.title || 'Track',
                 artist: payload.artist || track?.artist || '',
@@ -761,13 +671,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
             syncingRemoteRef.current = true;
             try {
-                // Always (re)start via API when URI changes or remote wants play while local is paused.
-                // Relying on resume() alone fails if Spotify never received the initial play command.
                 if (uriChanged || (payload.isPlaying && !playing)) {
                     setQueue(null);
                     await playTrackInternal(nextTrack, { startPositionMs: targetPos });
                     if (!payload.isPlaying) {
-                        await playerRef.current?.pause();
+                        await provider?.pause();
                         setPlaying(false);
                         positionAnchorRef.current = { position: targetPos, at: Date.now(), playing: false };
                         setPositionMs(targetPos);
@@ -782,7 +690,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                         until: Date.now() + 2000,
                         minPosition: targetPos,
                     };
-                    await playerRef.current?.seek(targetPos);
+                    await provider?.seek(targetPos);
                     setPositionMs(targetPos);
                     positionAnchorRef.current = {
                         position: targetPos,
@@ -792,7 +700,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 }
 
                 if (!payload.isPlaying && playing) {
-                    await playerRef.current?.pause();
+                    await provider?.pause();
                     setPlaying(false);
                     positionAnchorRef.current = {
                         position: targetPos,
@@ -822,7 +730,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         if (clamped > 0) {
             writeStoredVolume(LAST_VOLUME_STORAGE_KEY, clamped);
         }
-        await playerRef.current?.setVolume(clamped);
+        await providerRef.current?.setVolume(clamped);
     }, []);
 
     const toggleShuffle = useCallback(() => {
@@ -852,9 +760,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
-    // Restore last session once the player is ready
     useEffect(() => {
-        if (!ready || !spotifyConnected || restoredRef.current) {
+        if (!ready || !musicConnected || restoredRef.current) {
             return;
         }
         restoredRef.current = true;
@@ -874,11 +781,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             at: Date.now(),
             playing: false,
         };
-    }, [ready, spotifyConnected]);
+    }, [ready, musicConnected]);
 
-    // Persist current session continuously
     useEffect(() => {
-        if (!spotifyConnected || !track) {
+        if (!musicConnected || !track) {
             return;
         }
 
@@ -904,9 +810,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             window.removeEventListener('beforeunload', persist);
             persist();
         };
-    }, [spotifyConnected, track, queue]);
+    }, [musicConnected, track, queue]);
 
-    // Auto-advance / repeat when track ends
     useEffect(() => {
         if (!playing || !durationMs || durationMs < 1000) {
             return;
@@ -931,10 +836,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
             if (repeatOneRef.current) {
                 await seek(0);
-                const player = playerRef.current;
-                if (player) {
-                    await player.resume();
-                }
+                await providerRef.current?.resume();
                 setPlaying(true);
                 positionAnchorRef.current = { position: 0, at: Date.now(), playing: true };
                 advancingRef.current = false;
@@ -947,13 +849,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 setPlaying(false);
                 setPositionMs(0);
                 positionAnchorRef.current = { position: 0, at: Date.now(), playing: false };
-                const player = playerRef.current;
-                if (player) {
+                const provider = providerRef.current;
+                if (provider) {
                     try {
-                        await player.pause();
-                        await player.seek(0);
+                        await provider.pause();
+                        await provider.seek(0);
                     } catch {
-                        // ignore seek/pause errors at end of track
+                        // ignore
                     }
                 }
             }
@@ -1047,8 +949,8 @@ export function formatTimePrecise(ms: number): string {
     if (!Number.isFinite(ms) || ms < 0) {
         return '0:00.00';
     }
-    const minutes = Math.floor(ms / 60000);
-    const seconds = Math.floor((ms % 60000) / 1000);
-    const centiseconds = Math.floor((ms % 1000) / 10);
-    return `${minutes}:${String(seconds).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}`;
+    const totalSeconds = ms / 1000;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = (totalSeconds % 60).toFixed(2).padStart(5, '0');
+    return `${minutes}:${seconds}`;
 }

@@ -152,7 +152,8 @@ class ListeningRoomService
         return [
             'id' => $item->id,
             'song_id' => $item->song_id,
-            'spotify_uri' => $item->spotify_uri,
+            'provider' => $item->provider,
+            'track_uri' => $item->track_uri,
             'title' => $item->title,
             'artist' => $item->artist,
             'album_art_url' => $item->album_art_url,
@@ -186,8 +187,9 @@ class ListeningRoomService
         if (array_key_exists('position_ms', $payload)) {
             $updates['position_ms'] = max(0, (int) $payload['position_ms']);
         }
-        if (array_key_exists('spotify_uri', $payload) && filled($payload['spotify_uri'])) {
-            $updates['spotify_uri'] = $payload['spotify_uri'];
+        if (array_key_exists('track_uri', $payload) && filled($payload['track_uri'])) {
+            $updates['track_uri'] = $payload['track_uri'];
+            $updates['provider'] = $payload['provider'] ?? $room->provider ?? 'spotify';
             $updates['track_title'] = $payload['track_title'] ?? $room->track_title;
             $updates['track_artist'] = $payload['track_artist'] ?? $room->track_artist;
             $updates['album_art_url'] = $payload['album_art_url'] ?? $room->album_art_url;
@@ -230,7 +232,8 @@ class ListeningRoomService
                 'is_playing' => false,
                 'position_ms' => 0,
                 'playback_updated_at' => now(),
-                'spotify_uri' => null,
+                'provider' => null,
+                'track_uri' => null,
                 'track_title' => null,
                 'track_artist' => null,
                 'album_art_url' => null,
@@ -245,7 +248,8 @@ class ListeningRoomService
         $next->update(['status' => 'playing']);
 
         $room->update([
-            'spotify_uri' => $next->spotify_uri,
+            'provider' => $next->provider,
+            'track_uri' => $next->track_uri,
             'track_title' => $next->title,
             'track_artist' => $next->artist,
             'album_art_url' => $next->album_art_url,
@@ -269,7 +273,7 @@ class ListeningRoomService
             return $this->advanceToNextTrack($room);
         }
 
-        if (! filled($room->spotify_uri)) {
+        if (! filled($room->track_uri)) {
             return $room;
         }
 
@@ -292,17 +296,26 @@ class ListeningRoomService
         $songId = $payload['song_id'] ?? null;
         if ($songId) {
             $song = Song::query()->findOrFail($songId);
+            if (! $song->isPlayable()) {
+                throw new RuntimeException('Song hat keine abspielbare Provider-URI.');
+            }
             $payload = [
                 'song_id' => $song->id,
-                'spotify_uri' => $song->spotify_uri,
+                'provider' => $song->provider,
+                'track_uri' => $song->provider_uri,
                 'title' => $song->title,
                 'artist' => $song->artist,
                 'album_art_url' => $song->album_art_url,
             ];
         }
 
-        if (empty($payload['spotify_uri'])) {
-            throw new RuntimeException('Spotify-URI fehlt.');
+        if (empty($payload['track_uri'])) {
+            throw new RuntimeException('Track-URI fehlt.');
+        }
+
+        $provider = $payload['provider'] ?? $room->provider ?? 'spotify';
+        if (filled($room->provider) && $room->provider !== $provider && filled($room->track_uri)) {
+            throw new RuntimeException('Hörraum nutzt bereits einen anderen Musik-Anbieter.');
         }
 
         $position = (int) $room->queueItems()->where('status', 'queued')->max('position') + 1;
@@ -310,7 +323,8 @@ class ListeningRoomService
         $item = $room->queueItems()->create([
             'song_id' => $payload['song_id'] ?? null,
             'added_by' => $user->id,
-            'spotify_uri' => $payload['spotify_uri'],
+            'provider' => $provider,
+            'track_uri' => $payload['track_uri'],
             'title' => mb_substr($payload['title'] ?? 'Track', 0, 255),
             'artist' => mb_substr($payload['artist'] ?? 'Unbekannt', 0, 255),
             'album_art_url' => $payload['album_art_url'] ?? null,
@@ -319,7 +333,7 @@ class ListeningRoomService
         ]);
 
         // Auto-start if nothing playing
-        if (! $room->spotify_uri && ! $room->is_playing) {
+        if (! $room->track_uri && ! $room->is_playing) {
             $this->advanceToNextTrack($room);
         } else {
             $this->broadcast(new QueueUpdated($room, $this->serializeQueue($room)));

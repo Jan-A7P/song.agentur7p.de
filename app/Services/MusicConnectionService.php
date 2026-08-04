@@ -16,7 +16,9 @@ class MusicConnectionService
      */
     public function connectionsFor(User $user): Collection
     {
-        return $user->musicConnections()->orderBy('sort_order')->orderBy('connected_at')->get();
+        return $user->musicConnections()->orderBy('sort_order')->orderBy('connected_at')->get()
+            ->filter(fn (MusicConnection $connection) => MusicProvider::tryFrom($connection->provider) !== null)
+            ->values();
     }
 
     public function get(User $user, MusicProvider $provider): ?MusicConnection
@@ -31,6 +33,35 @@ class MusicConnectionService
         return $connection !== null && filled($connection->refresh_token);
     }
 
+    public function activeProvider(User $user): ?MusicProvider
+    {
+        foreach ($this->connectionsFor($user) as $connection) {
+            if (filled($connection->refresh_token)) {
+                return MusicProvider::tryFrom((string) $connection->provider);
+            }
+        }
+
+        if (filled($user->spotify_refresh_token)) {
+            return MusicProvider::Spotify;
+        }
+
+        return null;
+    }
+
+    /**
+     * @return list<array{provider: string, connected: bool}>
+     */
+    public function connectionsPayload(User $user): array
+    {
+        return collect($this->statusPayload($user))
+            ->map(fn (array $row) => [
+                'provider' => $row['provider'],
+                'connected' => $row['connected'],
+            ])
+            ->values()
+            ->all();
+    }
+
     /**
      * @param  list<string>  $providers
      */
@@ -43,7 +74,7 @@ class MusicConnectionService
             ->unique()
             ->values();
 
-        $existing = $this->connectionsFor($user)->keyBy(fn (MusicConnection $c) => $c->provider->value);
+        $existing = $this->connectionsFor($user)->keyBy(fn (MusicConnection $c) => (string) $c->provider);
 
         DB::transaction(function () use ($normalized, $existing) {
             $order = 0;
@@ -156,7 +187,7 @@ class MusicConnectionService
      */
     public function statusPayload(User $user): array
     {
-        $connected = $this->connectionsFor($user)->keyBy(fn (MusicConnection $c) => $c->provider->value);
+        $connected = $this->connectionsFor($user)->keyBy(fn (MusicConnection $c) => (string) $c->provider);
 
         return collect(MusicProvider::cases())->map(function (MusicProvider $provider) use ($connected) {
             $row = $connected->get($provider->value);

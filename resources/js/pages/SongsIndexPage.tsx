@@ -9,6 +9,7 @@ import { useAuth } from '@/context/auth-context';
 import { usePlayer } from '@/context/player-context';
 import { hasMusicConnected } from '@/lib/music';
 import { Alert } from '@/components/ui/alert';
+import { songIsPlayable, songToPlayerTrack } from '@/lib/playable';
 
 export function SongsIndexPage() {
     const { user, refreshUser } = useAuth();
@@ -16,24 +17,24 @@ export function SongsIndexPage() {
     const [songs, setSongs] = useState<Song[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [spotifyFlash, setSpotifyFlash] = useState<string | null>(() => {
+    const [oauthFlash, setOauthFlash] = useState<string | null>(() => {
         return new URLSearchParams(window.location.search).get('spotify');
     });
 
     useEffect(() => {
-        if (!spotifyFlash) {
+        if (!oauthFlash) {
             return;
         }
 
         window.history.replaceState({}, '', '/');
 
-        if (spotifyFlash === 'connected') {
+        if (oauthFlash === 'connected') {
             void refreshUser();
         }
 
-        const timer = window.setTimeout(() => setSpotifyFlash(null), 4000);
+        const timer = window.setTimeout(() => setOauthFlash(null), 4000);
         return () => window.clearTimeout(timer);
-    }, [spotifyFlash, refreshUser]);
+    }, [oauthFlash, refreshUser]);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -65,7 +66,8 @@ export function SongsIndexPage() {
         e.preventDefault();
         e.stopPropagation();
 
-        if (!song.spotify_uri) {
+        const playable = songToPlayerTrack(song);
+        if (!playable) {
             return;
         }
 
@@ -79,22 +81,14 @@ export function SongsIndexPage() {
             return;
         }
 
-        const uri = song.spotify_uri;
-        const isCurrent = track?.songId === song.id || track?.uri === uri;
+        const isCurrent = track?.songId === song.id || track?.uri === playable.uri;
 
         if (isCurrent) {
             await toggle();
             return;
         }
 
-        await playTrack({
-            uri,
-            title: song.title,
-            artist: song.artist,
-            albumArtUrl: song.album_art_url,
-            songId: song.id,
-            lyrics: song.lyrics,
-        });
+        await playTrack(playable);
     };
 
     return (
@@ -102,13 +96,13 @@ export function SongsIndexPage() {
             <section className="space-y-2">
                 <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">Songs</h1>
                 <p className="max-w-xl text-muted">
-                    Lyrics lesen und Spotify-Tracks direkt abspielen. Suche mit{' '}
+                    Lyrics lesen und Tracks direkt abspielen. Suche mit{' '}
                     <kbd className="rounded border border-line bg-paper-2 px-1.5 py-0.5 text-xs">Ctrl+K</kbd>.
                 </p>
             </section>
 
-            {spotifyFlash === 'connected' && <Alert variant="success">Spotify erfolgreich verbunden.</Alert>}
-            {spotifyFlash === 'error' && <Alert variant="error">Spotify-Verbindung abgebrochen.</Alert>}
+            {oauthFlash === 'connected' && <Alert variant="success">Musikdienst erfolgreich verbunden.</Alert>}
+            {oauthFlash === 'error' && <Alert variant="error">Verbindung abgebrochen.</Alert>}
 
             {error && <Alert variant="error">{error}</Alert>}
 
@@ -119,10 +113,10 @@ export function SongsIndexPage() {
             ) : (
                 <ul className="divide-y divide-line border-y border-line">
                     {songs.map((song) => {
-                        const uri = song.spotify_uri;
+                        const playable = songIsPlayable(song);
+                        const uri = song.provider_uri;
                         const isCurrent = Boolean(uri && (track?.songId === song.id || track?.uri === uri));
                         const isPlayingHere = isCurrent && playing;
-                        const playable = Boolean(uri);
 
                         return (
                             <li key={song.id}>
@@ -146,7 +140,9 @@ export function SongsIndexPage() {
                                     </Link>
                                     {playable && (
                                         <>
-                                            <Badge className="hidden sm:inline-flex">Spotify</Badge>
+                                            <Badge className="hidden sm:inline-flex capitalize">
+                                                {song.provider ?? 'Musik'}
+                                            </Badge>
                                             <Button
                                                 type="button"
                                                 variant="accent"

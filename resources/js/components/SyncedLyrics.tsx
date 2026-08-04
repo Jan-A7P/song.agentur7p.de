@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 type Props = {
     lyrics: string;
     songId: number;
-    spotifyUri: string | null;
+    trackUri: string | null;
 };
 
 type ViewMode = 'synced' | 'plain';
@@ -24,17 +24,17 @@ function clampCenter(index: number, length: number): number {
     return Math.min(Math.max(index, 0), length - 1);
 }
 
-export function SyncedLyrics({ lyrics, songId, spotifyUri }: Props) {
+export function SyncedLyrics({ lyrics, songId, trackUri }: Props) {
     const { track, positionMs, playing, seek } = usePlayer();
     const parsed = useMemo(() => parseLrc(lyrics), [lyrics]);
     const [mode, setMode] = useState<ViewMode>(parsed.isLrc ? 'synced' : 'plain');
     const [autoFollow, setAutoFollow] = useState(true);
     const [manualCenter, setManualCenter] = useState(0);
     const touchStartY = useRef<number | null>(null);
-    const lastSongKey = useRef(`${songId}:${spotifyUri ?? ''}`);
+    const lastSongKey = useRef(`${songId}:${trackUri ?? ''}`);
 
     const isCurrentTrack =
-        Boolean(spotifyUri) && track?.uri === spotifyUri && (track.songId === undefined || track.songId === songId);
+        Boolean(trackUri) && track?.uri === trackUri && (track.songId === undefined || track.songId === songId);
 
     const playbackIndex = useMemo(() => {
         if (!parsed.isLrc) {
@@ -52,13 +52,13 @@ export function SyncedLyrics({ lyrics, songId, spotifyUri }: Props) {
     }, [parsed.isLrc, lyrics]);
 
     useEffect(() => {
-        const key = `${songId}:${spotifyUri ?? ''}`;
+        const key = `${songId}:${trackUri ?? ''}`;
         if (lastSongKey.current !== key) {
             lastSongKey.current = key;
             setAutoFollow(true);
             setManualCenter(0);
         }
-    }, [songId, spotifyUri]);
+    }, [songId, trackUri]);
 
     useEffect(() => {
         if (isCurrentTrack && playing && positionMs < 1500) {

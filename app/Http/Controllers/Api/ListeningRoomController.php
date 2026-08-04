@@ -91,7 +91,8 @@ class ListeningRoomController extends Controller
         $validated = $request->validate([
             'action' => ['required', 'string', 'in:play,pause,seek,load,next,heartbeat'],
             'position_ms' => ['nullable', 'integer', 'min:0'],
-            'spotify_uri' => ['nullable', 'string', 'max:255'],
+            'provider' => ['nullable', 'string', 'max:32'],
+            'track_uri' => ['nullable', 'string', 'max:255'],
             'track_title' => ['nullable', 'string', 'max:255'],
             'track_artist' => ['nullable', 'string', 'max:255'],
             'album_art_url' => ['nullable', 'string', 'max:2048'],
@@ -121,7 +122,8 @@ class ListeningRoomController extends Controller
                     'is_playing' => $room->is_playing,
                 ]),
                 'load' => $this->rooms->setPlayback($request->user(), $room, [
-                    'spotify_uri' => $validated['spotify_uri'],
+                    'provider' => $validated['provider'] ?? 'spotify',
+                    'track_uri' => $validated['track_uri'],
                     'track_title' => $validated['track_title'] ?? null,
                     'track_artist' => $validated['track_artist'] ?? null,
                     'album_art_url' => $validated['album_art_url'] ?? null,
@@ -144,7 +146,8 @@ class ListeningRoomController extends Controller
         $room = ListeningRoom::query()->where('code', strtoupper($code))->firstOrFail();
         $validated = $request->validate([
             'song_id' => ['nullable', 'integer', 'exists:songs,id'],
-            'spotify_uri' => ['nullable', 'string', 'max:255'],
+            'provider' => ['nullable', 'string', 'max:32'],
+            'track_uri' => ['nullable', 'string', 'max:255'],
             'title' => ['nullable', 'string', 'max:255'],
             'artist' => ['nullable', 'string', 'max:255'],
             'album_art_url' => ['nullable', 'string', 'max:2048'],
@@ -274,7 +277,8 @@ class ListeningRoomController extends Controller
             'can_control' => ($member?->canControlPlayback() ?? false)
                 || (int) $room->host_user_id === (int) $user->id,
             'state' => [
-                'spotify_uri' => $room->spotify_uri,
+                'provider' => $room->provider,
+                'track_uri' => $room->track_uri,
                 'track_title' => $room->track_title,
                 'track_artist' => $room->track_artist,
                 'album_art_url' => $room->album_art_url,

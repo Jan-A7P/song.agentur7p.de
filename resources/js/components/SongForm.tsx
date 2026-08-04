@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { SpotifyTrackPicker } from '@/components/SpotifyTrackPicker';
+import { ProviderTrackPicker } from '@/components/ProviderTrackPicker';
 import {
     looksLikeLrc,
     lyricsToEditableLines,
@@ -16,15 +16,16 @@ import {
     type EditableLyricLine,
 } from '@/lib/lrc';
 import { usePlayer, formatTimePrecise } from '@/context/player-context';
-import type { Song, SpotifyTrack } from '@/types';
+import type { ProviderTrack, Song } from '@/types';
 import { cn } from '@/lib/utils';
 
 export type SongFormValues = {
     title: string;
     artist: string;
     lyrics: string;
-    spotify_track_id: string | null;
-    spotify_uri: string | null;
+    provider: string | null;
+    provider_track_id: string | null;
+    provider_uri: string | null;
     album_art_url: string | null;
 };
 
@@ -48,11 +49,12 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
     const [lines, setLines] = useState<EditableLyricLine[]>(() => lyricsToEditableLines(initial?.lyrics ?? ''));
     const [timingMode, setTimingMode] = useState(false);
     const [activeLine, setActiveLine] = useState(0);
-    const [track, setTrack] = useState<SpotifyTrack | null>(() => {
-        if (initial?.spotify_track_id) {
+    const [track, setTrack] = useState<ProviderTrack | null>(() => {
+        if (initial?.provider_track_id && initial?.provider) {
             return {
-                id: initial.spotify_track_id,
-                uri: initial.spotify_uri ?? `spotify:track:${initial.spotify_track_id}`,
+                provider: initial.provider,
+                id: initial.provider_track_id,
+                uri: initial.provider_uri ?? `spotify:track:${initial.provider_track_id}`,
                 name: initial.title ?? 'Track',
                 artist: initial.artist ?? '',
                 album_art_url: initial.album_art_url ?? null,
@@ -194,6 +196,8 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         }
 
         await playTrack({
+            provider: track.provider || 'spotify',
+            trackId: track.id,
             uri: playUri,
             title: title || track.name,
             artist: artist || track.artist,
@@ -213,8 +217,9 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                 title,
                 artist,
                 lyrics: finalLyrics,
-                spotify_track_id: track?.id ?? null,
-                spotify_uri: track?.uri ?? null,
+                provider: track?.provider ?? null,
+                provider_track_id: track?.id ?? null,
+                provider_uri: track?.uri ?? null,
                 album_art_url: track?.album_art_url ?? initial?.album_art_url ?? null,
             });
         } catch (err) {
@@ -224,7 +229,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         }
     };
 
-    const onTrackChange = (next: SpotifyTrack | null) => {
+    const onTrackChange = (next: ProviderTrack | null) => {
         setTrack(next);
         if (!next) {
             return;
@@ -266,7 +271,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
 
             <div className="space-y-2">
                 <Label>Track verknüpfen (optional)</Label>
-                <SpotifyTrackPicker value={track} onChange={onTrackChange} />
+                <ProviderTrackPicker value={track} onChange={onTrackChange} />
             </div>
 
             <div className="space-y-3">

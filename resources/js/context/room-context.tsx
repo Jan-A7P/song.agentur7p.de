@@ -134,7 +134,8 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     const applyState = useCallback(
         async (state: RoomPlaybackState) => {
             await syncFromRemote({
-                uri: state.spotify_uri,
+                provider: state.provider,
+                uri: state.track_uri,
                 title: state.track_title,
                 artist: state.track_artist,
                 albumArtUrl: state.album_art_url,
@@ -409,12 +410,12 @@ export function RoomProvider({ children }: { children: ReactNode }) {
             void sendPlayback('heartbeat', { position_ms: positionMsRef.current, ended: true });
         });
 
-        if (!room.state.is_playing || !room.state.spotify_uri || !ready) {
+        if (!room.state.is_playing || !room.state.track_uri || !ready) {
             return;
         }
 
         const timer = window.setInterval(() => {
-            if (!roomRef.current?.state.is_playing || !roomRef.current.state.spotify_uri) {
+            if (!roomRef.current?.state.is_playing || !roomRef.current.state.track_uri) {
                 return;
             }
             void sendPlayback('heartbeat', { position_ms: positionMsRef.current, ended: false });
@@ -424,11 +425,11 @@ export function RoomProvider({ children }: { children: ReactNode }) {
             window.clearInterval(timer);
             setOnTrackEnded(null);
         };
-    }, [room?.can_control, room?.state.is_playing, room?.state.spotify_uri, ready, sendPlayback, setOnTrackEnded]);
+    }, [room?.can_control, room?.state.is_playing, room?.state.track_uri, ready, sendPlayback, setOnTrackEnded]);
 
-    // Retry room sync once Spotify Web Playback is ready
+    // Retry room sync once the music provider player is ready
     useEffect(() => {
-        if (!ready || !room?.state.spotify_uri) {
+        if (!ready || !room?.state.track_uri) {
             return;
         }
         void applyState(room.state);

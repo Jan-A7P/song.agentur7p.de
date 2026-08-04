@@ -10,10 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { SyncedLyrics } from '@/components/SyncedLyrics';
 import { AddToPlaylist } from '@/components/AddToPlaylist';
-
-function songPlayable(song: Song): boolean {
-    return Boolean(song.spotify_uri);
-}
+import { songIsPlayable, songToPlayerTrack } from '@/lib/playable';
 
 export function SongShowPage() {
     const { id } = useParams();
@@ -56,13 +53,14 @@ export function SongShowPage() {
     }
 
     const isOwner = user?.id === song.user_id;
-    const playable = songPlayable(song);
-    const uri = playable ? song.spotify_uri : null;
+    const playableTrack = songToPlayerTrack(song);
+    const playable = songIsPlayable(song);
+    const uri = playableTrack?.uri ?? null;
     const isCurrent = Boolean(uri && track?.uri === uri) || track?.songId === song.id;
     const isPlayingHere = isCurrent && playing;
 
     const onPlay = async () => {
-        if (!playable || !uri) {
+        if (!playable || !playableTrack) {
             return;
         }
 
@@ -81,14 +79,7 @@ export function SongShowPage() {
             return;
         }
 
-        await playTrack({
-            uri,
-            title: song.title,
-            artist: song.artist,
-            albumArtUrl: song.album_art_url,
-            songId: song.id,
-            lyrics: song.lyrics,
-        });
+        await playTrack(playableTrack);
     };
 
     return (
@@ -137,15 +128,15 @@ export function SongShowPage() {
                 </div>
             </div>
 
-            {!playable && <Alert>Kein Spotify-Track verknüpft.</Alert>}
+            {!playable && <Alert>Kein Track verknüpft.</Alert>}
             {playable && !user && (
                 <Alert>
-                    Zum Abspielen bitte <Link className="underline underline-offset-2" to="/login">einloggen</Link> und einen Provider verbinden.
+                    Zum Abspielen bitte <Link className="underline underline-offset-2" to="/login">einloggen</Link> und einen Musikdienst verbinden.
                 </Alert>
             )}
             {playable && user && !hasMusicConnected(user) && (
                 <Alert>
-                    Noch kein Musik-Provider verbunden.{' '}
+                    Noch kein Musikdienst verbunden.{' '}
                     <Link className="font-medium underline underline-offset-2" to="/settings">
                         Zu den Einstellungen
                     </Link>
@@ -154,7 +145,7 @@ export function SongShowPage() {
 
             {error && <Alert variant="error">{error}</Alert>}
 
-            <SyncedLyrics lyrics={song.lyrics} songId={song.id} spotifyUri={song.spotify_uri} />
+            <SyncedLyrics lyrics={song.lyrics} songId={song.id} trackUri={song.provider_uri} />
         </article>
     );
 }

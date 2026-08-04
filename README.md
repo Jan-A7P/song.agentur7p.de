@@ -48,29 +48,31 @@ SANCTUM_STATEFUL_DOMAINS=localhost,localhost:8000,127.0.0.1,127.0.0.1:8000
 
 Für Production die echte Domain ergänzen (ohne Protokoll).
 
-## Spotify
+## Musikdienste (Spotify)
+
+Die App spricht eine generische Music-API (`/api/music/{provider}/…`). Derzeit ist nur Spotify implementiert.
 
 1. App unter https://developer.spotify.com/dashboard anlegen
-2. Redirect URI eintragen, z. B. `http://127.0.0.1:8000/spotify/callback`
+2. Redirect URI eintragen, z. B. `http://127.0.0.1:8000/music/spotify/callback` (Legacy-Alias `/spotify/callback` bleibt aktiv)
 3. In `.env` setzen:
 
 ```
 SPOTIFY_CLIENT_ID=...
 SPOTIFY_CLIENT_SECRET=...
-SPOTIFY_REDIRECT_URI="${APP_URL}/spotify/callback"
+SPOTIFY_REDIRECT_URI="${APP_URL}/music/spotify/callback"
 ```
 
 **Hinweis:** Browser-Playback benötigt Spotify Premium. Ohne Premium funktionieren Songtexte und Track-Verknüpfung weiterhin.
 
 ## Hörräume (Jam)
 
-Gemeinsames Hören: Host steuert Song/Play/Pause/Seek; Teilnehmer spielen synchron auf dem eigenen Spotify Premium.
+Gemeinsames Hören: Host steuert Song/Play/Pause/Seek; Teilnehmer spielen synchron über den verbundenen Musikdienst.
 
 1. `BROADCAST_CONNECTION=reverb` und Reverb-Keys in `.env` (siehe `.env.example`)
 2. Reverb mitstarten: `composer run dev` (inkl. `php artisan reverb:start`) oder separat
 3. In der App unter **Hörräume** einen Raum erstellen und Code/Link teilen
 
-Alle Teilnehmer müssen eingeloggt und mit Spotify verbunden sein.
+Alle Teilnehmer müssen eingeloggt und mit demselben Musikdienst (aktuell Spotify) verbunden sein.
 
 ## API-Überblick
 
@@ -81,13 +83,15 @@ Alle Teilnehmer müssen eingeloggt und mit Spotify verbunden sein.
 | GET | `/api/user` | ja |
 | GET | `/api/songs`, `/api/songs/{id}` | nein |
 | POST/PUT/DELETE | `/api/songs` | ja |
-| GET | `/api/spotify/search`, `/api/spotify/token` | ja |
-| POST | `/api/spotify/play`, `/api/spotify/disconnect` | ja |
+| GET | `/api/music/providers` | ja |
+| GET | `/api/music/{provider}/search`, `/token`, `/status`, `/playlists` | ja |
+| POST | `/api/music/{provider}/play`, `/disconnect`, `/playlists/import` | ja |
 | GET/POST | `/api/rooms…` | ja |
-| GET | `/spotify/redirect`, `/spotify/callback` | Session |
+| GET | `/music/spotify/redirect`, `/music/spotify/callback` | Session |
 
 ## Frontend
 
 - Entry: `resources/js/main.tsx`
+- Music providers: `resources/js/music/`
 - Pages: `resources/js/pages/`
 - UI: `resources/js/components/ui/`

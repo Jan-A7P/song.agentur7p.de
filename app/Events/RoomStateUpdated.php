@@ -29,7 +29,8 @@ class RoomStateUpdated implements ShouldBroadcastNow
     {
         return [
             'state' => [
-                'spotify_uri' => $this->room->spotify_uri,
+                'provider' => $this->room->provider,
+                'track_uri' => $this->room->track_uri,
                 'track_title' => $this->room->track_title,
                 'track_artist' => $this->room->track_artist,
                 'album_art_url' => $this->room->album_art_url,

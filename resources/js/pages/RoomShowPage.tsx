@@ -78,7 +78,7 @@ export function RoomShowPage() {
         const timer = window.setTimeout(async () => {
             try {
                 const { data } = await api.get<Paginated<Song>>('/songs', { params: { q: songQuery } });
-                setSongResults(data.data.filter((s) => Boolean(s.spotify_uri)).slice(0, 8));
+                setSongResults(data.data.filter((s) => Boolean(s.provider_uri)).slice(0, 8));
             } catch {
                 setSongResults([]);
             }

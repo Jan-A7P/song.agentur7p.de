@@ -3,12 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Download, ListMusic, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
+import { hasMusicConnected, isProviderConnected, providerConnectUrl } from '@/lib/music';
 import type { Playlist } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 
-type SpotifyPlaylist = {
+type RemotePlaylist = {
     id: string;
     name: string;
     description: string | null;
@@ -18,32 +19,35 @@ type SpotifyPlaylist = {
     can_import: boolean;
 };
 
+const PROVIDER = 'spotify' as const;
+
 export function PlaylistImportPage() {
     const { user, refreshUser } = useAuth();
     const navigate = useNavigate();
-    const [playlists, setPlaylists] = useState<SpotifyPlaylist[]>([]);
+    const [playlists, setPlaylists] = useState<RemotePlaylist[]>([]);
     const [loading, setLoading] = useState(true);
     const [importingId, setImportingId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [needsReconnect, setNeedsReconnect] = useState(false);
     const [flash, setFlash] = useState<string | null>(null);
+    const connected = isProviderConnected(user, PROVIDER);
 
     const loadPlaylists = async () => {
         setLoading(true);
         setError(null);
         setNeedsReconnect(false);
         try {
-            const { data } = await api.get<{ playlists: SpotifyPlaylist[]; needs_reconnect?: boolean; message?: string }>(
-                '/spotify/playlists',
+            const { data } = await api.get<{ playlists: RemotePlaylist[]; needs_reconnect?: boolean; message?: string }>(
+                `/music/${PROVIDER}/playlists`,
             );
             setPlaylists(data.playlists);
         } catch (err: unknown) {
             const axiosErr = err as { response?: { data?: { message?: string; needs_reconnect?: boolean } } };
             setPlaylists([]);
-            setNeedsReconnect(Boolean(axiosErr.response?.data?.needs_reconnect) || !user?.spotify_connected);
+            setNeedsReconnect(Boolean(axiosErr.response?.data?.needs_reconnect) || !connected);
             setError(
                 axiosErr.response?.data?.message ??
-                    'Spotify-Playlists konnten nicht geladen werden. Bitte Spotify erneut verbinden.',
+                    'Playlists konnten nicht geladen werden. Bitte den Musikdienst erneut verbinden.',
             );
         } finally {
             setLoading(false);
@@ -62,22 +66,22 @@ export function PlaylistImportPage() {
             window.history.replaceState({}, '', '/playlists/import');
         }
 
-        if (user?.spotify_connected) {
+        if (connected) {
             void loadPlaylists();
         } else {
             setLoading(false);
             setNeedsReconnect(true);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user?.spotify_connected]);
+    }, [connected]);
 
-    const importPlaylist = async (spotifyPlaylistId: string) => {
-        setImportingId(spotifyPlaylistId);
+    const importPlaylist = async (playlistId: string) => {
+        setImportingId(playlistId);
         setError(null);
         try {
             const { data } = await api.post<{ data: Playlist; imported_tracks: number }>(
-                '/spotify/playlists/import',
-                { spotify_playlist_id: spotifyPlaylistId },
+                `/music/${PROVIDER}/playlists/import`,
+                { playlist_id: playlistId },
             );
             navigate(`/playlists/${data.data.id}`, {
                 state: { importedTracks: data.imported_tracks },
@@ -103,23 +107,23 @@ export function PlaylistImportPage() {
                         </Link>
                     </p>
                     <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-                        Spotify-Playlist importieren
+                        Playlist importieren
                     </h1>
                     <p className="mt-2 max-w-2xl text-muted">
                         Tracks werden als neue Songs ohne Songtext angelegt. Importierbar sind eigene und kollaborative
-                        Playlists (Spotify Dev-Mode-Einschränkung).
+                        Playlists.
                     </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    {user?.spotify_connected && (
+                    {connected && (
                         <Button type="button" variant="outline" onClick={() => void loadPlaylists()} disabled={loading}>
                             <RefreshCw className="h-4 w-4" />
                             Aktualisieren
                         </Button>
                     )}
                     <Button asChild variant="accent">
-                        <a href="/spotify/redirect?force=1&redirect=/playlists/import">
-                            Spotify {user?.spotify_connected ? 'neu verbinden' : 'verbinden'}
+                        <a href={providerConnectUrl(PROVIDER, '/playlists/import', { force: true })}>
+                            Spotify {connected ? 'neu verbinden' : 'verbinden'}
                         </a>
                     </Button>
                 </div>
@@ -135,7 +139,7 @@ export function PlaylistImportPage() {
                 </Alert>
             )}
 
-            {!user?.spotify_connected ? (
+            {!hasMusicConnected(user) || !connected ? (
                 <div className="rounded-2xl border border-dashed border-line px-6 py-12 text-center">
                     <ListMusic className="mx-auto mb-3 h-8 w-8 text-muted" />
                     <p className="text-muted">Zuerst Spotify verbinden, um Playlists zu laden.</p>
@@ -143,7 +147,7 @@ export function PlaylistImportPage() {
             ) : loading ? (
                 <p className="text-muted">Playlists werden geladen…</p>
             ) : playlists.length === 0 ? (
-                <p className="text-muted">Keine Spotify-Playlists gefunden.</p>
+                <p className="text-muted">Keine Playlists gefunden.</p>
             ) : (
                 <ul className="divide-y divide-line border-y border-line">
                     {playlists.map((playlist) => {

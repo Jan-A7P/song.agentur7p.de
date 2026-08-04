@@ -27,13 +27,17 @@ class MusicConnection extends Model
     protected function casts(): array
     {
         return [
-            'provider' => MusicProvider::class,
             'token_expires_at' => 'datetime',
             'connected_at' => 'datetime',
             'access_token' => 'encrypted',
             'refresh_token' => 'encrypted',
             'sort_order' => 'integer',
         ];
+    }
+
+    public function providerEnum(): ?MusicProvider
+    {
+        return MusicProvider::tryFrom((string) $this->provider);
     }
 
     public function user(): BelongsTo

@@ -1,7 +1,17 @@
+import type { MusicProviderId } from '@/music/types';
+
+export type MusicConnectionStatus = {
+    provider: MusicProviderId;
+    connected: boolean;
+};
+
 export type User = {
     id: number;
     name: string;
     email: string;
+    music_connections: MusicConnectionStatus[];
+    active_provider: MusicProviderId | null;
+    /** @deprecated use music_connections / active_provider */
     spotify_connected: boolean;
 };
 
@@ -10,8 +20,9 @@ export type Song = {
     title: string;
     artist: string;
     lyrics: string;
-    spotify_track_id: string | null;
-    spotify_uri: string | null;
+    provider: MusicProviderId | null;
+    provider_track_id: string | null;
+    provider_uri: string | null;
     album_art_url: string | null;
     user_id: number;
     created_at: string;
@@ -43,7 +54,8 @@ export type Playlist = {
     songs?: Song[];
 };
 
-export type SpotifyTrack = {
+export type ProviderTrack = {
+    provider: MusicProviderId;
     id: string;
     uri: string;
     name: string;
@@ -51,6 +63,9 @@ export type SpotifyTrack = {
     album_art_url: string | null;
     duration_ms?: number | null;
 };
+
+/** @deprecated use ProviderTrack */
+export type SpotifyTrack = ProviderTrack;
 
 export type Paginated<T> = {
     data: T[];
@@ -65,7 +80,8 @@ export type Paginated<T> = {
 export type RoomMemberRole = 'host' | 'moderator' | 'member';
 
 export type RoomPlaybackState = {
-    spotify_uri: string | null;
+    provider: MusicProviderId | null;
+    track_uri: string | null;
     track_title: string | null;
     track_artist: string | null;
     album_art_url: string | null;
@@ -78,7 +94,8 @@ export type RoomPlaybackState = {
 export type RoomQueueItem = {
     id: number;
     song_id: number | null;
-    spotify_uri: string;
+    provider: MusicProviderId | null;
+    track_uri: string;
     title: string;
     artist: string;
     album_art_url: string | null;

@@ -3,9 +3,9 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ListeningRoomController;
 use App\Http\Controllers\Api\LyricsController;
+use App\Http\Controllers\Api\MusicController;
 use App\Http\Controllers\Api\PlaylistController;
 use App\Http\Controllers\Api\SongController;
-use App\Http\Controllers\Api\SpotifyController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/register', [AuthController::class, 'register']);
@@ -34,13 +34,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/playlists/{playlist}/songs/{song}', [PlaylistController::class, 'removeSong']);
     Route::put('/playlists/{playlist}/reorder', [PlaylistController::class, 'reorder']);
 
-    Route::get('/spotify/status', [SpotifyController::class, 'status']);
-    Route::get('/spotify/token', [SpotifyController::class, 'token']);
-    Route::get('/spotify/search', [SpotifyController::class, 'search']);
-    Route::get('/spotify/playlists', [SpotifyController::class, 'playlists']);
-    Route::post('/spotify/playlists/import', [SpotifyController::class, 'importPlaylist']);
-    Route::post('/spotify/play', [SpotifyController::class, 'play']);
-    Route::post('/spotify/disconnect', [SpotifyController::class, 'disconnect']);
+    Route::get('/music/providers', [MusicController::class, 'providers']);
+    Route::get('/music/{provider}/status', [MusicController::class, 'status']);
+    Route::get('/music/{provider}/token', [MusicController::class, 'token']);
+    Route::get('/music/{provider}/search', [MusicController::class, 'search']);
+    Route::get('/music/{provider}/playlists', [MusicController::class, 'playlists']);
+    Route::post('/music/{provider}/playlists/import', [MusicController::class, 'importPlaylist']);
+    Route::post('/music/{provider}/play', [MusicController::class, 'play']);
+    Route::post('/music/{provider}/disconnect', [MusicController::class, 'disconnect']);
 
     Route::get('/lyrics/lookup', [LyricsController::class, 'lookup']);
 

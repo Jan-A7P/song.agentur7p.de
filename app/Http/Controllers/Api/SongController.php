@@ -90,8 +90,9 @@ class SongController extends Controller
             'title' => ['required', 'string', 'max:255'],
             'artist' => ['required', 'string', 'max:255'],
             'lyrics' => ['nullable', 'string'],
-            'spotify_track_id' => ['nullable', 'string', 'max:255'],
-            'spotify_uri' => ['nullable', 'string', 'max:255'],
+            'provider' => ['nullable', 'string', 'max:32'],
+            'provider_track_id' => ['nullable', 'string', 'max:255'],
+            'provider_uri' => ['nullable', 'string', 'max:255'],
             'album_art_url' => ['nullable', 'string', 'max:2048'],
         ]);
     }

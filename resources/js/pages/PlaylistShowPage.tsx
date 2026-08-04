@@ -93,7 +93,7 @@ function SortableSongRow({
                 <p className="truncate text-sm text-muted">{song.artist}</p>
             </Link>
 
-            {song.spotify_uri && (
+            {song.provider_uri && (
                 <Button type="button" variant="accent" size="icon" onClick={onPlay} aria-label={isPlayingHere ? 'Pause' : 'Play'}>
                     {isPlayingHere ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                 </Button>
@@ -110,9 +110,11 @@ function SortableSongRow({
 
 function toPlayerTracks(songs: Song[]): PlayerTrack[] {
     return songs
-        .filter((song) => Boolean(song.spotify_uri))
+        .filter((song) => Boolean(song.provider_uri && song.provider))
         .map((song) => ({
-            uri: song.spotify_uri as string,
+            provider: song.provider as PlayerTrack['provider'],
+            trackId: song.provider_track_id || song.provider_uri!.split(':').pop() || '',
+            uri: song.provider_uri as string,
             title: song.title,
             artist: song.artist,
             albumArtUrl: song.album_art_url,
@@ -132,7 +134,7 @@ export function PlaylistShowPage() {
     const [error, setError] = useState<string | null>(null);
     const [flash, setFlash] = useState<string | null>(() => {
         const imported = (location.state as { importedTracks?: number } | null)?.importedTracks;
-        return typeof imported === 'number' ? `${imported} Songs aus Spotify importiert.` : null;
+        return typeof imported === 'number' ? `${imported} Songs importiert.` : null;
     });
     const [savingOrder, setSavingOrder] = useState(false);
     const [showAdd, setShowAdd] = useState(false);
@@ -310,7 +312,7 @@ export function PlaylistShowPage() {
     };
 
     const onPlaySong = async (song: Song, index: number) => {
-        if (!song.spotify_uri || !ensureAuthForPlay()) {
+        if (!song.provider_uri || !ensureAuthForPlay()) {
             return;
         }
 
@@ -324,13 +326,15 @@ export function PlaylistShowPage() {
             return;
         }
 
-        const uri = song.spotify_uri;
+        const uri = song.provider_uri;
         if (track?.songId === song.id || track?.uri === uri) {
             await toggle();
             return;
         }
 
         await playTrack({
+            provider: (song.provider as PlayerTrack['provider']) || 'spotify',
+            trackId: song.provider_track_id || uri.split(':').pop() || '',
             uri,
             title: song.title,
             artist: song.artist,
@@ -346,7 +350,7 @@ export function PlaylistShowPage() {
         }
         const playable = toPlayerTracks(songs);
         if (playable.length === 0) {
-            setError('Keine Songs mit Spotify-Track in der Playlist.');
+            setError('Keine abspielbaren Tracks in der Playlist.');
             return;
         }
         await playPlaylist(playable, {
@@ -383,7 +387,7 @@ export function PlaylistShowPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                    {songs.some((song) => song.spotify_uri) && (
+                    {songs.some((song) => song.provider_uri) && (
                         <>
                             <Button type="button" variant="accent" onClick={() => void onPlayAll(false)}>
                                 <Play className="h-4 w-4" />
@@ -523,7 +527,7 @@ export function PlaylistShowPage() {
                                     song={song}
                                     isOwner={isOwner}
                                     isPlayingHere={
-                                        (track?.songId === song.id || track?.uri === song.spotify_uri) && playing
+                                        (track?.songId === song.id || track?.uri === song.provider_uri) && playing
                                     }
                                     onPlay={() => void onPlaySong(song, index)}
                                     onRemove={() => void removeSong(song.id)}

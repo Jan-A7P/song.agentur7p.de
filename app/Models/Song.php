@@ -11,8 +11,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
     'title',
     'artist',
     'lyrics',
-    'spotify_track_id',
-    'spotify_uri',
+    'provider',
+    'provider_track_id',
+    'provider_uri',
     'album_art_url',
     'user_id',
 ])]
@@ -28,5 +29,10 @@ class Song extends Model
         return $this->belongsToMany(Playlist::class)
             ->withPivot(['id', 'position'])
             ->withTimestamps();
+    }
+
+    public function isPlayable(): bool
+    {
+        return filled($this->provider) && filled($this->provider_uri);
     }
 }
