@@ -1,0 +1,42 @@
+import Echo from 'laravel-echo';
+import Pusher from 'pusher-js';
+
+declare global {
+    interface Window {
+        Pusher: typeof Pusher;
+        Echo: Echo<'reverb'>;
+    }
+}
+
+window.Pusher = Pusher;
+
+let echoInstance: Echo<'reverb'> | null = null;
+
+export function getEcho(): Echo<'reverb'> {
+    if (echoInstance) {
+        return echoInstance;
+    }
+
+    echoInstance = new Echo({
+        broadcaster: 'reverb',
+        key: import.meta.env.VITE_REVERB_APP_KEY,
+        wsHost: import.meta.env.VITE_REVERB_HOST ?? window.location.hostname,
+        wsPort: Number(import.meta.env.VITE_REVERB_PORT ?? 8080),
+        wssPort: Number(import.meta.env.VITE_REVERB_PORT ?? 443),
+        forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'https') === 'https',
+        enabledTransports: ['ws', 'wss'],
+        authEndpoint: '/broadcasting/auth',
+        auth: {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-XSRF-TOKEN': decodeURIComponent(
+                    document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/)?.[1] ?? '',
+                ),
+            },
+        },
+        withCredentials: true,
+    });
+
+    window.Echo = echoInstance;
+    return echoInstance;
+}

@@ -1,0 +1,87 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../js/**/*.{js,ts,tsx}';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+    --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+    --color-ink: var(--ink);
+    --color-paper: var(--paper);
+    --color-paper-2: var(--paper-2);
+    --color-accent: var(--accent);
+    --color-accent-soft: var(--accent-soft);
+    --color-muted: var(--muted);
+    --color-line: var(--line);
+    --color-success: var(--success);
+    --color-danger: var(--danger);
+    --color-danger-soft: var(--danger-soft);
+    --color-surface: var(--surface);
+    --radius-lg: 0.75rem;
+}
+
+:root {
+    --ink: #1a1714;
+    --paper: #f7f3ec;
+    --paper-2: #efe8dc;
+    --accent: #c45c26;
+    --accent-soft: #e8a57a;
+    --muted: #6b645a;
+    --line: #d9d0c3;
+    --success: #2f6b4f;
+    --danger: #9f2d2d;
+    --danger-soft: #f8e8e6;
+    --surface: color-mix(in oklab, white 55%, transparent);
+    --glow-a: color-mix(in oklab, var(--accent-soft) 35%, transparent);
+    --glow-b: color-mix(in oklab, var(--paper-2) 90%, #c8d5c0);
+    --player-shadow: 0 -12px 40px rgba(26, 23, 20, 0.1);
+}
+
+.dark {
+    --ink: #f2ebe2;
+    --paper: #14110f;
+    --paper-2: #1f1b17;
+    --accent: #e07a45;
+    --accent-soft: #a85a35;
+    --muted: #a89f93;
+    --line: #3a342e;
+    --success: #6aad88;
+    --danger: #f0a0a0;
+    --danger-soft: #3a1f1c;
+    --surface: color-mix(in oklab, white 6%, transparent);
+    --glow-a: color-mix(in oklab, var(--accent) 18%, transparent);
+    --glow-b: color-mix(in oklab, #2a2420 80%, #1a3028);
+    --player-shadow: 0 -12px 40px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+}
+
+@layer base {
+    html {
+        color-scheme: light;
+    }
+
+    html.dark {
+        color-scheme: dark;
+    }
+
+    body {
+        @apply bg-paper text-ink font-sans;
+        background-image:
+            radial-gradient(ellipse 80% 50% at 10% -10%, var(--glow-a), transparent),
+            radial-gradient(ellipse 60% 40% at 100% 0%, var(--glow-b), transparent);
+        background-attachment: fixed;
+        min-height: 100vh;
+        transition: background-color 200ms ease, color 200ms ease;
+    }
+
+    #root {
+        min-height: 100vh;
+    }
+}
+
+@utility font-display {
+    font-family: var(--font-display);
+}
