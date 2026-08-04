@@ -26,22 +26,37 @@ class MusicConnectionService
         return $user->musicConnections()->where('provider', $provider->value)->first();
     }
 
+    public function isLinked(User $user, MusicProvider $provider): bool
+    {
+        $connection = $this->get($user, $provider);
+        if ($connection !== null) {
+            return $connection->isLinked();
+        }
+
+        // Legacy Spotify tokens only when no connection row exists yet.
+        return $provider === MusicProvider::Spotify && filled($user->spotify_refresh_token);
+    }
+
     public function isConnected(User $user, MusicProvider $provider): bool
     {
         $connection = $this->get($user, $provider);
+        if ($connection !== null) {
+            return $connection->isEnabled();
+        }
 
-        return $connection !== null && filled($connection->refresh_token);
+        // Legacy Spotify tokens only when no connection row exists yet.
+        return $provider === MusicProvider::Spotify && filled($user->spotify_refresh_token);
     }
 
     public function activeProvider(User $user): ?MusicProvider
     {
         foreach ($this->connectionsFor($user) as $connection) {
-            if (filled($connection->refresh_token)) {
+            if ($connection->isEnabled()) {
                 return MusicProvider::tryFrom((string) $connection->provider);
             }
         }
 
-        if (filled($user->spotify_refresh_token)) {
+        if (! $this->get($user, MusicProvider::Spotify) && filled($user->spotify_refresh_token)) {
             return MusicProvider::Spotify;
         }
 
@@ -49,7 +64,7 @@ class MusicConnectionService
     }
 
     /**
-     * @return list<array{provider: string, connected: bool}>
+     * @return list<array{provider: string, connected: bool, enabled: bool}>
      */
     public function connectionsPayload(User $user): array
     {
@@ -57,6 +72,7 @@ class MusicConnectionService
             ->map(fn (array $row) => [
                 'provider' => $row['provider'],
                 'connected' => $row['connected'],
+                'enabled' => $row['enabled'],
             ])
             ->values()
             ->all();
@@ -117,6 +133,49 @@ class MusicConnectionService
         });
     }
 
+    public function setEnabled(User $user, MusicProvider $provider, bool $enabled): MusicConnection
+    {
+        return DB::transaction(function () use ($user, $provider, $enabled) {
+            $connection = $this->get($user, $provider);
+
+            // Promote legacy Spotify tokens into a connection row so enable/disable works.
+            if (
+                ! $connection
+                && $provider === MusicProvider::Spotify
+                && filled($user->spotify_refresh_token)
+            ) {
+                $connection = $user->musicConnections()->create([
+                    'provider' => MusicProvider::Spotify->value,
+                    'access_token' => $user->spotify_access_token,
+                    'refresh_token' => $user->spotify_refresh_token,
+                    'token_expires_at' => $user->spotify_token_expires_at,
+                    'enabled' => true,
+                    'sort_order' => 0,
+                    'connected_at' => now(),
+                ]);
+            }
+
+            if (! $connection || ! $connection->isLinked()) {
+                throw new RuntimeException('Verbindung nicht gefunden.');
+            }
+
+            $connection->forceFill(['enabled' => $enabled])->save();
+
+            if ($enabled) {
+                $user->musicConnections()
+                    ->where('provider', '!=', $provider->value)
+                    ->increment('sort_order');
+
+                $connection->forceFill([
+                    'sort_order' => 0,
+                    'connected_at' => now(),
+                ])->save();
+            }
+
+            return $connection->fresh();
+        });
+    }
+
     public function upsertTokens(
         User $user,
         MusicProvider $provider,
@@ -139,6 +198,7 @@ class MusicConnectionService
         if ($connection) {
             if ($bumpToFront) {
                 $payload['connected_at'] = now();
+                $payload['enabled'] = true;
             }
             $connection->update($payload);
         } else {
@@ -146,6 +206,7 @@ class MusicConnectionService
             $connection = $user->musicConnections()->create([
                 ...$payload,
                 'provider' => $provider->value,
+                'enabled' => true,
                 'sort_order' => $user->musicConnections()->exists() ? $maxOrder + 1 : 0,
                 'connected_at' => now(),
             ]);
@@ -183,19 +244,20 @@ class MusicConnectionService
     }
 
     /**
-     * @return list<array{provider: string, label: string, connected: bool, sort_order: int|null, connected_at: string|null}>
+     * @return list<array{provider: string, label: string, connected: bool, enabled: bool, sort_order: int|null, connected_at: string|null}>
      */
     public function statusPayload(User $user): array
     {
-        $connected = $this->connectionsFor($user)->keyBy(fn (MusicConnection $c) => (string) $c->provider);
-
-        return collect(MusicProvider::cases())->map(function (MusicProvider $provider) use ($connected) {
-            $row = $connected->get($provider->value);
+        return collect(MusicProvider::cases())->map(function (MusicProvider $provider) use ($user) {
+            $row = $this->get($user, $provider);
+            $linked = $this->isLinked($user, $provider);
+            $enabled = $this->isConnected($user, $provider);
 
             return [
                 'provider' => $provider->value,
                 'label' => $provider->label(),
-                'connected' => $row !== null && filled($row->refresh_token),
+                'connected' => $linked,
+                'enabled' => $enabled,
                 'sort_order' => $row?->sort_order,
                 'connected_at' => $row?->connected_at?->toIso8601String(),
                 'id' => $row?->id,

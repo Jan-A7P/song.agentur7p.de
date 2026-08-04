@@ -3,6 +3,8 @@ import type { MusicProviderId } from '@/music/types';
 export type MusicConnectionStatus = {
     provider: MusicProviderId;
     connected: boolean;
+    /** Soft toggle; omitted/true means usable when connected */
+    enabled?: boolean;
 };
 
 export type User = {
@@ -15,15 +17,30 @@ export type User = {
     spotify_connected: boolean;
 };
 
+export type SongProviderLink = {
+    provider: MusicProviderId;
+    provider_track_id: string;
+    provider_uri: string;
+    album_art_url?: string | null;
+};
+
 export type Song = {
     id: number;
     title: string;
     artist: string;
     lyrics: string;
     provider: MusicProviderId | null;
+    preferred_provider?: MusicProviderId | null;
+    last_working_provider?: MusicProviderId | null;
     provider_track_id: string | null;
     provider_uri: string | null;
     album_art_url: string | null;
+    providers?: SongProviderLink[];
+    duration_ms?: number | null;
+    play_count?: number;
+    total_listen_ms?: number;
+    last_played_at?: string | null;
+    is_favorited?: boolean;
     user_id: number;
     created_at: string;
     updated_at: string;
@@ -37,6 +54,44 @@ export type Song = {
         playlist_id?: number;
         song_id?: number;
     };
+};
+
+export type SongPlay = {
+    id: number;
+    song_id: number;
+    listened_ms: number;
+    completed: boolean;
+};
+
+export type SongPlayHistoryItem = {
+    id: number;
+    provider: MusicProviderId | null;
+    listened_ms: number;
+    completed: boolean;
+    created_at: string | null;
+};
+
+export type SongDailyStat = {
+    date: string;
+    plays: number;
+    listen_ms: number;
+    avg_listen_ms: number;
+};
+
+export type SongStats = {
+    play_count: number;
+    total_listen_ms: number;
+    completed_count: number;
+    duration_ms: number | null;
+    last_played_at: string | null;
+    my: {
+        play_count: number;
+        total_listen_ms: number;
+        completed_count: number;
+        last_played_at: string | null;
+    } | null;
+    recent_plays: SongPlayHistoryItem[];
+    daily: SongDailyStat[];
 };
 
 export type Playlist = {

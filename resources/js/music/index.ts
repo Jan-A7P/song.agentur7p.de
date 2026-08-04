@@ -1,5 +1,5 @@
 export type { MusicProvider } from './MusicProvider';
-export { getActiveProvider, getProvider } from './registry';
+export { getActiveProvider, getProvider, releaseProvider } from './registry';
 export type {
     MusicProviderId,
     PlayableTrack,

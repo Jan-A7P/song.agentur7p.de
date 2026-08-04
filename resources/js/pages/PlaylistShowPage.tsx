@@ -22,8 +22,10 @@ import api from '@/lib/api';
 import type { Paginated, Playlist, Song } from '@/types';
 import { useAuth } from '@/context/auth-context';
 import { usePlayer, type PlayerTrack } from '@/context/player-context';
-import { hasMusicConnected } from '@/lib/music';
+import { hasMusicConnected, providerLabel } from '@/lib/music';
+import { songIsPlayable, songProviderLinks, songToPlayerTrack } from '@/lib/playable';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Alert } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import {
@@ -93,7 +95,21 @@ function SortableSongRow({
                 <p className="truncate text-sm text-muted">{song.artist}</p>
             </Link>
 
-            {song.provider_uri && (
+            <div className="hidden flex-wrap justify-end gap-1 sm:flex">
+                {songProviderLinks(song).map((link) => (
+                    <Badge
+                        key={link.provider}
+                        className={cn(
+                            link.provider === (song.preferred_provider ?? song.provider) &&
+                                'border-accent/20 bg-accent/10 text-accent',
+                        )}
+                    >
+                        {providerLabel(link.provider)}
+                    </Badge>
+                ))}
+            </div>
+
+            {songIsPlayable(song) && (
                 <Button type="button" variant="accent" size="icon" onClick={onPlay} aria-label={isPlayingHere ? 'Pause' : 'Play'}>
                     {isPlayingHere ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                 </Button>
@@ -108,19 +124,10 @@ function SortableSongRow({
     );
 }
 
-function toPlayerTracks(songs: Song[]): PlayerTrack[] {
+function toPlayerTracks(songs: Song[], user: Parameters<typeof songToPlayerTrack>[1]): PlayerTrack[] {
     return songs
-        .filter((song) => Boolean(song.provider_uri && song.provider))
-        .map((song) => ({
-            provider: song.provider as PlayerTrack['provider'],
-            trackId: song.provider_track_id || song.provider_uri!.split(':').pop() || '',
-            uri: song.provider_uri as string,
-            title: song.title,
-            artist: song.artist,
-            albumArtUrl: song.album_art_url,
-            songId: song.id,
-            lyrics: song.lyrics,
-        }));
+        .map((song) => songToPlayerTrack(song, user))
+        .filter((track): track is PlayerTrack => track !== null);
 }
 
 export function PlaylistShowPage() {
@@ -311,12 +318,12 @@ export function PlaylistShowPage() {
         return true;
     };
 
-    const onPlaySong = async (song: Song, index: number) => {
-        if (!song.provider_uri || !ensureAuthForPlay()) {
+    const onPlaySong = async (song: Song) => {
+        if (!songIsPlayable(song) || !ensureAuthForPlay()) {
             return;
         }
 
-        const playable = toPlayerTracks(songs);
+        const playable = toPlayerTracks(songs, user);
         if (playable.length > 1) {
             const startIndex = playable.findIndex((item) => item.songId === song.id);
             await playPlaylist(playable, {
@@ -326,29 +333,24 @@ export function PlaylistShowPage() {
             return;
         }
 
-        const uri = song.provider_uri;
-        if (track?.songId === song.id || track?.uri === uri) {
+        const single = songToPlayerTrack(song, user);
+        if (!single) {
+            return;
+        }
+
+        if (track?.songId === song.id || track?.uri === single.uri) {
             await toggle();
             return;
         }
 
-        await playTrack({
-            provider: (song.provider as PlayerTrack['provider']) || 'spotify',
-            trackId: song.provider_track_id || uri.split(':').pop() || '',
-            uri,
-            title: song.title,
-            artist: song.artist,
-            albumArtUrl: song.album_art_url,
-            songId: song.id,
-            lyrics: song.lyrics,
-        });
+        await playTrack(single);
     };
 
     const onPlayAll = async (withShuffle = false) => {
         if (!ensureAuthForPlay()) {
             return;
         }
-        const playable = toPlayerTracks(songs);
+        const playable = toPlayerTracks(songs, user);
         if (playable.length === 0) {
             setError('Keine abspielbaren Tracks in der Playlist.');
             return;
@@ -387,7 +389,7 @@ export function PlaylistShowPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                    {songs.some((song) => song.provider_uri) && (
+                    {songs.some((song) => songIsPlayable(song)) && (
                         <>
                             <Button type="button" variant="accent" onClick={() => void onPlayAll(false)}>
                                 <Play className="h-4 w-4" />
@@ -521,15 +523,17 @@ export function PlaylistShowPage() {
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
                     <SortableContext items={songIds} strategy={verticalListSortingStrategy}>
                         <ul className="space-y-2">
-                            {songs.map((song, index) => (
+                            {songs.map((song) => (
                                 <SortableSongRow
                                     key={song.id}
                                     song={song}
                                     isOwner={isOwner}
                                     isPlayingHere={
-                                        (track?.songId === song.id || track?.uri === song.provider_uri) && playing
+                                        (track?.songId === song.id ||
+                                            songProviderLinks(song).some((l) => l.provider_uri === track?.uri)) &&
+                                        playing
                                     }
-                                    onPlay={() => void onPlaySong(song, index)}
+                                    onPlay={() => void onPlaySong(song)}
                                     onRemove={() => void removeSong(song.id)}
                                 />
                             ))}

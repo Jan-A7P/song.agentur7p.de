@@ -41,4 +41,11 @@ return [
         'redirect' => env('SPOTIFY_REDIRECT_URI', env('APP_URL').'/music/spotify/callback'),
     ],
 
+    'tidal' => [
+        'client_id' => env('TIDAL_CLIENT_ID'),
+        'client_secret' => env('TIDAL_CLIENT_SECRET'),
+        'redirect' => env('TIDAL_REDIRECT_URI', env('APP_URL').'/music/tidal/callback'),
+        'country_code' => env('TIDAL_COUNTRY_CODE', 'DE'),
+    ],
+
 ];

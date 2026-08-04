@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { Download, Loader2, Pause, Play, TimerReset } from 'lucide-react';
+import { Download, Loader2, Pause, Play, Star, TimerReset, X } from 'lucide-react';
 import api from '@/lib/api';
+import { useAuth } from '@/context/auth-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -16,7 +17,10 @@ import {
     type EditableLyricLine,
 } from '@/lib/lrc';
 import { usePlayer, formatTimePrecise } from '@/context/player-context';
-import type { ProviderTrack, Song } from '@/types';
+import { connectedProviderIds, providerLabel, providerTrackUri } from '@/lib/music';
+import { songProviderLinks } from '@/lib/playable';
+import type { MusicProviderId } from '@/music/types';
+import type { ProviderTrack, Song, SongProviderLink } from '@/types';
 import { cn } from '@/lib/utils';
 
 export type SongFormValues = {
@@ -24,9 +28,11 @@ export type SongFormValues = {
     artist: string;
     lyrics: string;
     provider: string | null;
+    preferred_provider: string | null;
     provider_track_id: string | null;
     provider_uri: string | null;
     album_art_url: string | null;
+    providers: SongProviderLink[];
 };
 
 type Props = {
@@ -41,7 +47,15 @@ type LyricsLookupResponse = {
     source: string;
 };
 
+function initialLinks(initial?: Partial<Song>): SongProviderLink[] {
+    if (!initial) {
+        return [];
+    }
+    return songProviderLinks(initial as Song);
+}
+
 export function SongForm({ initial, submitLabel, onSubmit }: Props) {
+    const { user } = useAuth();
     const { track: playerTrack, playing, positionMs, playTrack, toggle } = usePlayer();
     const [title, setTitle] = useState(initial?.title ?? '');
     const [artist, setArtist] = useState(initial?.artist ?? '');
@@ -49,19 +63,13 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
     const [lines, setLines] = useState<EditableLyricLine[]>(() => lyricsToEditableLines(initial?.lyrics ?? ''));
     const [timingMode, setTimingMode] = useState(false);
     const [activeLine, setActiveLine] = useState(0);
-    const [track, setTrack] = useState<ProviderTrack | null>(() => {
-        if (initial?.provider_track_id && initial?.provider) {
-            return {
-                provider: initial.provider,
-                id: initial.provider_track_id,
-                uri: initial.provider_uri ?? `spotify:track:${initial.provider_track_id}`,
-                name: initial.title ?? 'Track',
-                artist: initial.artist ?? '',
-                album_art_url: initial.album_art_url ?? null,
-            };
-        }
-        return null;
-    });
+    const [links, setLinks] = useState<SongProviderLink[]>(() => initialLinks(initial));
+    const [preferredProvider, setPreferredProvider] = useState<MusicProviderId | null>(
+        () =>
+            (initial?.preferred_provider as MusicProviderId | null | undefined) ??
+            initialLinks(initial)[0]?.provider ??
+            null,
+    );
     const [error, setError] = useState<string | null>(null);
     const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
     const [fetchingLyrics, setFetchingLyrics] = useState(false);
@@ -69,6 +77,14 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
     const lyricsRef = useRef(lyrics);
     const titleRef = useRef(title);
     const artistRef = useRef(artist);
+
+    const preferredLink = useMemo(
+        () => links.find((l) => l.provider === preferredProvider) ?? links[0] ?? null,
+        [links, preferredProvider],
+    );
+
+    const activeProviders = useMemo(() => connectedProviderIds(user), [user]);
+    const searchProviders = activeProviders;
 
     useEffect(() => {
         lyricsRef.current = lyrics;
@@ -181,12 +197,14 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
     };
 
     const ensurePlaying = async () => {
-        if (!track?.uri && !track?.id) {
+        if (!preferredLink) {
             setError('Bitte zuerst einen Track verknüpfen.');
             return;
         }
 
-        const playUri = track.uri || `spotify:track:${track.id}`;
+        const playUri =
+            preferredLink.provider_uri ||
+            providerTrackUri(preferredLink.provider, preferredLink.provider_track_id);
         const isCurrent = playerTrack?.uri === playUri;
         if (isCurrent) {
             if (!playing) {
@@ -196,12 +214,12 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         }
 
         await playTrack({
-            provider: track.provider || 'spotify',
-            trackId: track.id,
+            provider: preferredLink.provider,
+            trackId: preferredLink.provider_track_id,
             uri: playUri,
-            title: title || track.name,
-            artist: artist || track.artist,
-            albumArtUrl: track.album_art_url,
+            title: title || preferredLink.provider,
+            artist: artist,
+            albumArtUrl: preferredLink.album_art_url ?? null,
             songId: initial?.id,
             lyrics: timingMode ? serializeEditableLines(lines) : lyrics,
         });
@@ -213,14 +231,17 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         setError(null);
         try {
             const finalLyrics = timingMode ? serializeEditableLines(lines) : lyrics;
+            const preferred = preferredLink;
             await onSubmit({
                 title,
                 artist,
                 lyrics: finalLyrics,
-                provider: track?.provider ?? null,
-                provider_track_id: track?.id ?? null,
-                provider_uri: track?.uri ?? null,
-                album_art_url: track?.album_art_url ?? initial?.album_art_url ?? null,
+                provider: preferred?.provider ?? null,
+                preferred_provider: preferred?.provider ?? null,
+                provider_track_id: preferred?.provider_track_id ?? null,
+                provider_uri: preferred?.provider_uri ?? null,
+                album_art_url: preferred?.album_art_url ?? initial?.album_art_url ?? null,
+                providers: links,
             });
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.');
@@ -230,10 +251,29 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
     };
 
     const onTrackChange = (next: ProviderTrack | null) => {
-        setTrack(next);
         if (!next) {
             return;
         }
+
+        if (!activeProviders.includes(next.provider)) {
+            setError(
+                `${providerLabel(next.provider)} ist nicht aktiv. Bitte den Dienst in den Einstellungen aktivieren.`,
+            );
+            return;
+        }
+
+        const link: SongProviderLink = {
+            provider: next.provider,
+            provider_track_id: next.id,
+            provider_uri: next.uri || providerTrackUri(next.provider, next.id),
+            album_art_url: next.album_art_url,
+        };
+
+        setLinks((prev) => {
+            const without = prev.filter((l) => l.provider !== next.provider);
+            return [...without, link];
+        });
+        setPreferredProvider((prev) => prev ?? next.provider);
 
         const nextTitle = titleRef.current || next.name;
         const nextArtist = artistRef.current || next.artist;
@@ -249,6 +289,19 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
             artist: nextArtist,
             durationMs: next.duration_ms,
             force: false,
+        });
+    };
+
+    const removeLink = (provider: MusicProviderId) => {
+        setLinks((prev) => {
+            const next = prev.filter((l) => l.provider !== provider);
+            setPreferredProvider((current) => {
+                if (current !== provider) {
+                    return current;
+                }
+                return next[0]?.provider ?? null;
+            });
+            return next;
         });
     };
 
@@ -270,8 +323,118 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
             </div>
 
             <div className="space-y-2">
-                <Label>Track verknüpfen (optional)</Label>
-                <ProviderTrackPicker value={track} onChange={onTrackChange} />
+                <Label>Tracks verknüpfen (optional)</Label>
+                <p className="text-xs text-muted">
+                    Pro aktivem Musikdienst einen Track hinterlegen und festlegen, welcher bevorzugt
+                    abgespielt wird. Inaktive Dienste erscheinen nicht in der Suche.
+                </p>
+
+                {links.length > 0 && (
+                    <div
+                        role="radiogroup"
+                        aria-label="Bevorzugter Musikdienst"
+                        className="space-y-2"
+                    >
+                        {links.map((link) => {
+                            const isPreferred = preferredProvider === link.provider;
+                            const preferId = `preferred-${link.provider}`;
+                            const isActive = activeProviders.includes(link.provider);
+
+                            return (
+                                <div
+                                    key={link.provider}
+                                    className={cn(
+                                        'flex flex-wrap items-center gap-3 rounded-2xl border px-3 py-3 transition-colors',
+                                        isPreferred
+                                            ? 'border-accent/40 bg-accent/5 ring-1 ring-accent/15'
+                                            : 'border-line bg-surface hover:border-accent/25',
+                                        !isActive && 'opacity-70',
+                                    )}
+                                >
+                                    {link.album_art_url ? (
+                                        <img
+                                            src={link.album_art_url}
+                                            alt=""
+                                            className="h-11 w-11 shrink-0 rounded-lg object-cover"
+                                        />
+                                    ) : (
+                                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-line bg-paper-2 text-[10px] font-medium text-muted">
+                                            {providerLabel(link.provider).slice(0, 2).toUpperCase()}
+                                        </div>
+                                    )}
+
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="text-sm font-medium">
+                                                {providerLabel(link.provider)}
+                                            </span>
+                                            {isPreferred && (
+                                                <Badge className="border-accent/20 bg-accent/10 text-accent">
+                                                    Bevorzugt
+                                                </Badge>
+                                            )}
+                                            {!isActive && (
+                                                <Badge>Inaktiv</Badge>
+                                            )}
+                                        </div>
+                                        <p className="mt-0.5 truncate text-xs text-muted">
+                                            {link.provider_uri}
+                                        </p>
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        id={preferId}
+                                        role="radio"
+                                        aria-checked={isPreferred}
+                                        aria-label={`${providerLabel(link.provider)} als bevorzugt setzen`}
+                                        onClick={() => setPreferredProvider(link.provider)}
+                                        className={cn(
+                                            'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium transition',
+                                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                                            isPreferred
+                                                ? 'border-accent/35 bg-accent text-white shadow-sm'
+                                                : 'border-line bg-paper-2 text-muted hover:border-accent/30 hover:text-ink',
+                                        )}
+                                    >
+                                        <Star
+                                            className={cn(
+                                                'h-3.5 w-3.5',
+                                                isPreferred && 'fill-current',
+                                            )}
+                                            aria-hidden
+                                        />
+                                        {isPreferred ? 'Bevorzugt' : 'Bevorzugen'}
+                                    </button>
+
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 shrink-0"
+                                        aria-label={`${providerLabel(link.provider)} entfernen`}
+                                        onClick={() => removeLink(link.provider)}
+                                    >
+                                        <X className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+
+                {searchProviders.length > 0 ? (
+                    <ProviderTrackPicker
+                        providers={searchProviders}
+                        value={null}
+                        onChange={onTrackChange}
+                    />
+                ) : (
+                    <p className="rounded-xl border border-dashed border-line bg-surface/60 px-3 py-3 text-xs text-muted">
+                        Kein aktiver Musikdienst. Bitte in den Einstellungen einen Dienst verbinden und
+                        aktivieren.
+                    </p>
+                )}
             </div>
 
             <div className="space-y-3">
@@ -286,7 +449,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                             disabled={fetchingLyrics || !title.trim() || !artist.trim()}
                             onClick={() =>
                                 void fetchLyrics({
-                                    durationMs: track?.duration_ms,
+                                    durationMs: undefined,
                                     force: true,
                                 })
                             }
@@ -333,7 +496,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                                 </p>
                             </div>
                             <Button type="button" size="sm" variant="accent" onClick={() => void ensurePlaying()}>
-                                {playerTrack?.uri === track?.uri && playing ? (
+                                {playerTrack?.uri === preferredLink?.provider_uri && playing ? (
                                     <>
                                         <Pause className="h-4 w-4" /> Pause
                                     </>

@@ -79,8 +79,12 @@ class SpotifyService
     {
         $connection = $this->connections->get($user, MusicProvider::Spotify);
 
-        if (! $connection || ! filled($connection->refresh_token)) {
+        if (! $connection || ! $connection->isLinked()) {
             throw new RuntimeException('Spotify is not connected.');
+        }
+
+        if (! $connection->isEnabled()) {
+            throw new RuntimeException('Spotify ist deaktiviert. Aktiviere den Dienst in den Einstellungen.');
         }
 
         if ($connection->isTokenFresh() && filled($connection->access_token)) {

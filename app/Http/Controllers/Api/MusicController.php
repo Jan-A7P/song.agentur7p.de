@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\MusicProvider;
 use App\Http\Controllers\Controller;
 use App\Music\MusicProviderRegistry;
 use App\Services\MusicConnectionService;
@@ -39,8 +40,40 @@ class MusicController extends Controller
             'provider' => $adapter->id(),
             'label' => $adapter->label(),
             'configured' => $adapter->isConfigured(),
-            'connected' => $this->registry->isConnected($request->user(), $adapter->id()),
+            'connected' => $this->connections->isLinked($request->user(), MusicProvider::from($adapter->id())),
+            'enabled' => $this->registry->isConnected($request->user(), $adapter->id()),
             'connections' => $this->connections->statusPayload($request->user()),
+        ]);
+    }
+
+    public function setEnabled(Request $request, string $provider): JsonResponse
+    {
+        $request->validate([
+            'enabled' => ['required'],
+        ]);
+
+        try {
+            $adapter = $this->registry->resolve($provider);
+            $enum = MusicProvider::from($adapter->id());
+            $connection = $this->connections->setEnabled(
+                $request->user(),
+                $enum,
+                $request->boolean('enabled'),
+            );
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 404);
+        } catch (Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $user = $request->user()->fresh();
+
+        return response()->json([
+            'provider' => $adapter->id(),
+            'connected' => true,
+            'enabled' => (bool) $connection->enabled,
+            'active_provider' => $this->connections->activeProvider($user)?->value,
+            'music_connections' => $this->connections->connectionsPayload($user),
         ]);
     }
 
@@ -62,6 +95,7 @@ class MusicController extends Controller
             'access_token' => $accessToken,
             'provider' => $adapter->id(),
             'connected' => true,
+            'client_id' => $adapter->clientId(),
         ]);
     }
 

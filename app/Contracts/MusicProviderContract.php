@@ -32,4 +32,6 @@ interface MusicProviderContract
     public function getPlaylistTracks(User $user, string $playlistId): array;
 
     public function playUri(User $user, string $uri, string $deviceId, int $positionMs = 0): void;
+
+    public function clientId(): ?string;
 }

@@ -8,6 +8,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -56,6 +57,16 @@ class User extends Authenticatable
         return $this->hasMany(Playlist::class);
     }
 
+    public function favoriteSongs(): BelongsToMany
+    {
+        return $this->belongsToMany(Song::class, 'song_favorites')->withTimestamps();
+    }
+
+    public function songPlays(): HasMany
+    {
+        return $this->hasMany(SongPlay::class);
+    }
+
     public function listeningRooms(): HasMany
     {
         return $this->hasMany(ListeningRoom::class, 'host_user_id');
@@ -68,7 +79,16 @@ class User extends Authenticatable
 
     public function hasSpotifyConnected(): bool
     {
-        return app(MusicConnectionService::class)->isConnected($this, MusicProvider::Spotify)
-            || filled($this->spotify_refresh_token);
+        return app(MusicConnectionService::class)->isConnected($this, MusicProvider::Spotify);
+    }
+
+    public function hasTidalConnected(): bool
+    {
+        return app(MusicConnectionService::class)->isConnected($this, MusicProvider::Tidal);
+    }
+
+    public function hasMusicConnected(): bool
+    {
+        return $this->hasSpotifyConnected() || $this->hasTidalConnected();
     }
 }

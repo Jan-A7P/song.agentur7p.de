@@ -4,7 +4,9 @@ import { PlayerProvider } from '@/context/player-context';
 import { ThemeProvider } from '@/context/theme-context';
 import { RoomProvider } from '@/context/room-context';
 import { AppLayout } from '@/components/AppLayout';
+import { GlobalErrorToasts } from '@/components/GlobalErrorToasts';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { Toaster } from '@/components/ui/toaster';
 import { SongsIndexPage } from '@/pages/SongsIndexPage';
 import { SongShowPage } from '@/pages/SongShowPage';
 import { SongCreatePage } from '@/pages/SongCreatePage';
@@ -27,6 +29,8 @@ export default function App() {
                 <BrowserRouter>
                     <PlayerProvider>
                         <RoomProvider>
+                            <GlobalErrorToasts />
+                            <Toaster />
                             <Routes>
                                 <Route element={<AppLayout />}>
                                     <Route index element={<SongsIndexPage />} />

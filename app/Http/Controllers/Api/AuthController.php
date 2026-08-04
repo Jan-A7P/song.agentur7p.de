@@ -83,7 +83,7 @@ class AuthController extends Controller
      *   id: int,
      *   name: string,
      *   email: string,
-     *   music_connections: list<array{provider: string, connected: bool}>,
+     *   music_connections: list<array{provider: string, connected: bool, enabled: bool}>,
      *   active_provider: string|null,
      *   spotify_connected: bool,
      * }

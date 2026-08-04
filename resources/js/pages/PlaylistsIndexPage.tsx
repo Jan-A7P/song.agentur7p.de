@@ -88,7 +88,7 @@ export function PlaylistsIndexPage() {
                         <li key={playlist.id}>
                             <Link
                                 to={`/playlists/${playlist.id}`}
-                                className="flex items-center gap-4 py-4 transition hover:bg-surface"
+                                className="group -mx-3 flex items-center gap-4 rounded-lg px-3 py-4 transition hover:bg-surface"
                             >
                                 <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-paper-2 text-muted">
                                     <ListMusic className="h-5 w-5" />

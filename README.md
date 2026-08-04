@@ -1,6 +1,6 @@
 # Songtexte
 
-Laravel-API mit Sanctum-Auth und React-SPA (TypeScript, Tailwind, shadcn-ähnliche UI-Komponenten) zum Verwalten von Songtexten und Abspielen über Spotify.
+Laravel-API mit Sanctum-Auth und React-SPA (TypeScript, Tailwind, shadcn-ähnliche UI-Komponenten) zum Verwalten von Songtexten und Abspielen über Spotify oder TIDAL.
 
 ## Voraussetzungen
 
@@ -8,7 +8,7 @@ Laravel-API mit Sanctum-Auth und React-SPA (TypeScript, Tailwind, shadcn-ähnlic
 - Composer
 - Node.js 20+
 - MySQL oder SQLite
-- Spotify Developer App (für Suche & Playback)
+- Spotify und/oder TIDAL Developer App (für Suche & Playback)
 
 ## Setup
 
@@ -48,12 +48,14 @@ SANCTUM_STATEFUL_DOMAINS=localhost,localhost:8000,127.0.0.1,127.0.0.1:8000
 
 Für Production die echte Domain ergänzen (ohne Protokoll).
 
-## Musikdienste (Spotify)
+## Musikdienste (Spotify & TIDAL)
 
-Die App spricht eine generische Music-API (`/api/music/{provider}/…`). Derzeit ist nur Spotify implementiert.
+Die App spricht eine generische Music-API (`/api/music/{provider}/…`). Implementiert sind **Spotify** und **TIDAL**.
+
+### Spotify
 
 1. App unter https://developer.spotify.com/dashboard anlegen
-2. Redirect URI eintragen, z. B. `http://127.0.0.1:8000/music/spotify/callback` (Legacy-Alias `/spotify/callback` bleibt aktiv)
+2. Redirect URI: `http://127.0.0.1:8000/music/spotify/callback` (Legacy-Alias `/spotify/callback` bleibt aktiv)
 3. In `.env` setzen:
 
 ```
@@ -62,7 +64,22 @@ SPOTIFY_CLIENT_SECRET=...
 SPOTIFY_REDIRECT_URI="${APP_URL}/music/spotify/callback"
 ```
 
-**Hinweis:** Browser-Playback benötigt Spotify Premium. Ohne Premium funktionieren Songtexte und Track-Verknüpfung weiterhin.
+**Hinweis:** Browser-Playback benötigt Spotify Premium.
+
+### TIDAL
+
+1. App unter https://developer.tidal.com anlegen
+2. Redirect URI: `http://127.0.0.1:8000/music/tidal/callback`
+3. In `.env` setzen:
+
+```
+TIDAL_CLIENT_ID=...
+TIDAL_CLIENT_SECRET=...
+TIDAL_REDIRECT_URI="${APP_URL}/music/tidal/callback"
+TIDAL_COUNTRY_CODE=DE
+```
+
+**Hinweis:** Die Wiedergabe läuft über das offizielle TIDAL Web Player SDK. Für Drittanbieter-Apps ist das oft auf Previews beschränkt, je nach Freischaltung der TIDAL Developer App.
 
 ## Hörräume (Jam)
 
@@ -72,7 +89,7 @@ Gemeinsames Hören: Host steuert Song/Play/Pause/Seek; Teilnehmer spielen synchr
 2. Reverb mitstarten: `composer run dev` (inkl. `php artisan reverb:start`) oder separat
 3. In der App unter **Hörräume** einen Raum erstellen und Code/Link teilen
 
-Alle Teilnehmer müssen eingeloggt und mit demselben Musikdienst (aktuell Spotify) verbunden sein.
+Alle Teilnehmer müssen eingeloggt und mit demselben Musikdienst (Spotify oder TIDAL) verbunden sein.
 
 ## API-Überblick
 
@@ -88,6 +105,7 @@ Alle Teilnehmer müssen eingeloggt und mit demselben Musikdienst (aktuell Spotif
 | POST | `/api/music/{provider}/play`, `/disconnect`, `/playlists/import` | ja |
 | GET/POST | `/api/rooms…` | ja |
 | GET | `/music/spotify/redirect`, `/music/spotify/callback` | Session |
+| GET | `/music/tidal/redirect`, `/music/tidal/callback` | Session |
 
 ## Frontend
 

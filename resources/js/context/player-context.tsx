@@ -10,8 +10,21 @@ import {
 } from 'react';
 import axios from 'axios';
 import { useAuth } from '@/context/auth-context';
-import { activeProviderId, hasMusicConnected } from '@/lib/music';
-import { getActiveProvider, type MusicProvider, type PlayableTrack, type ProviderPlaybackState } from '@/music';
+import api from '@/lib/api';
+import {
+    activeProviderId,
+    connectedProviderIds,
+    hasMusicConnected,
+    isProviderConnected,
+    providerFromUri,
+    providerLabel,
+    scoreProviderTrackMatch,
+} from '@/lib/music';
+import { playerTrackForProvider, songToPlayerTrack } from '@/lib/playable';
+import { toast } from '@/lib/toast';
+import { getProvider, releaseProvider, type MusicProvider, type PlayableTrack, type ProviderPlaybackState } from '@/music';
+import type { MusicProviderId } from '@/music/types';
+import type { ProviderTrack, Song, SongPlay } from '@/types';
 
 export type PlayerTrack = PlayableTrack;
 
@@ -40,6 +53,8 @@ type PlayerContextValue = {
     playPlaylist: (tracks: PlayerTrack[], options?: { playlistId?: number; startIndex?: number; shuffle?: boolean }) => Promise<void>;
     playNext: () => Promise<void>;
     playPrevious: () => Promise<void>;
+    switchProvider: (provider: MusicProviderId) => Promise<void>;
+    attachSongProviders: (song: Song) => void;
     toggle: () => Promise<void>;
     setVolume: (volume: number) => Promise<void>;
     seek: (positionMs: number) => Promise<void>;
@@ -93,6 +108,9 @@ function readStoredSession(): StoredSession | null {
             albumArtUrl: parsed.track.albumArtUrl ?? null,
             songId: parsed.track.songId,
             lyrics: parsed.track.lyrics,
+            providerLinks: parsed.track.providerLinks,
+            preferredProvider: parsed.track.preferredProvider ?? null,
+            lastWorkingProvider: parsed.track.lastWorkingProvider ?? null,
         };
         return {
             track,
@@ -184,18 +202,125 @@ function sequentialIndices(length: number): number[] {
 }
 
 function normalizeTrack(track: PlayerTrack): PlayerTrack {
+    const inferred = providerFromUri(track.uri);
+    const provider = track.provider || inferred || 'spotify';
+
     return {
         ...track,
-        provider: track.provider || 'spotify',
+        provider,
         trackId: track.trackId || track.uri.split(':').pop() || '',
     };
+}
+
+async function resolveFallbackTrack(
+    track: PlayerTrack,
+    user: Parameters<typeof connectedProviderIds>[0],
+): Promise<PlayerTrack | null> {
+    const connected = connectedProviderIds(user);
+    if (connected.length === 0) {
+        return null;
+    }
+
+    // 1) Prefer other *stored* links for this song (no search guesswork).
+    const stored = track.providerLinks ?? [];
+    if (stored.length > 0) {
+        const byProvider = new Map(stored.map((l) => [l.provider, l]));
+        const order: MusicProviderId[] = [];
+        if (track.preferredProvider) {
+            order.push(track.preferredProvider);
+        }
+        if (track.lastWorkingProvider) {
+            order.push(track.lastWorkingProvider);
+        }
+        const active = activeProviderId(user);
+        if (active) {
+            order.push(active);
+        }
+        for (const link of stored) {
+            order.push(link.provider);
+        }
+
+        const seen = new Set<MusicProviderId>();
+        for (const id of order) {
+            if (seen.has(id) || id === track.provider) {
+                continue;
+            }
+            seen.add(id);
+            if (!connected.includes(id)) {
+                continue;
+            }
+            const link = byProvider.get(id);
+            if (!link) {
+                continue;
+            }
+            return {
+                ...track,
+                provider: link.provider,
+                trackId: link.trackId,
+                uri: link.uri,
+                albumArtUrl: link.albumArtUrl ?? track.albumArtUrl,
+            };
+        }
+    }
+
+    // 2) Last resort: search by title/artist on other connected providers.
+    const alternatives = connected.filter((id) => id !== track.provider);
+    const query = [track.title, track.artist].filter(Boolean).join(' ').trim();
+    if (alternatives.length === 0 || !query) {
+        return null;
+    }
+
+    let best: { score: number; track: PlayerTrack } | null = null;
+
+    for (const providerId of alternatives) {
+        try {
+            const { data } = await api.get<{ tracks: ProviderTrack[] }>(`/music/${providerId}/search`, {
+                params: { q: query },
+            });
+
+            for (const candidate of data.tracks ?? []) {
+                const score = scoreProviderTrackMatch(candidate, track.title, track.artist);
+                if (score < 60) {
+                    continue;
+                }
+                if (!best || score > best.score) {
+                    best = {
+                        score,
+                        track: {
+                            ...track,
+                            provider: candidate.provider || providerId,
+                            trackId: candidate.id,
+                            uri: candidate.uri,
+                            title: candidate.name || track.title,
+                            artist: candidate.artist || track.artist,
+                            albumArtUrl: candidate.album_art_url ?? track.albumArtUrl,
+                            providerLinks: track.providerLinks,
+                            preferredProvider: track.preferredProvider,
+                            lastWorkingProvider: track.lastWorkingProvider,
+                        },
+                    };
+                }
+            }
+        } catch {
+            // try next provider
+        }
+    }
+
+    return best?.track ?? null;
 }
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
     const { user } = useAuth();
     const musicConnected = hasMusicConnected(user);
     const providerId = activeProviderId(user);
+    const connectedIds = connectedProviderIds(user);
     const providerRef = useRef<MusicProvider | null>(null);
+    const providersRef = useRef<Map<MusicProviderId, MusicProvider>>(new Map());
+    const userRef = useRef(user);
+
+    useEffect(() => {
+        userRef.current = user;
+    }, [user]);
 
     const positionAnchorRef = useRef<{ position: number; at: number; playing: boolean }>({
         position: 0,
@@ -213,6 +338,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const resumeGuardRef = useRef<{ until: number; minPosition: number } | null>(null);
     const onTrackEndedRef = useRef<(() => void) | null>(null);
     const syncingRemoteRef = useRef(false);
+    const activePlayRef = useRef<{ songId: number; playId: number; reportedMs: number } | null>(null);
+    const playListenAnchorRef = useRef<{ at: number; baseMs: number; playing: boolean } | null>(null);
 
     const [track, setTrack] = useState<PlayerTrack | null>(null);
     const [providerReady, setProviderReady] = useState(false);
@@ -220,12 +347,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const [positionMs, setPositionMs] = useState(0);
     const [durationMs, setDurationMs] = useState(0);
     const [volume, setVolumeState] = useState(() => readStoredVolume(VOLUME_STORAGE_KEY, 0.7));
-    const [error, setError] = useState<string | null>(null);
+    const [error, setErrorState] = useState<string | null>(null);
     const [queue, setQueue] = useState<QueueState | null>(null);
     const [shuffle, setShuffle] = useState(() => readStoredFlag(SHUFFLE_STORAGE_KEY, false));
     const [repeatOne, setRepeatOne] = useState(() => readStoredFlag(REPEAT_STORAGE_KEY, false));
     const [controlsLocked, setControlsLocked] = useState(false);
     const volumeRef = useRef(volume);
+
+    const setError = useCallback((message: string | null) => {
+        setErrorState(message);
+        if (message) {
+            toast.error(message, 'Player');
+        }
+    }, []);
 
     const ready = musicConnected && providerReady;
 
@@ -290,22 +424,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const current = state.track;
         if (current) {
             setTrack((prev) => ({
-                provider: prev?.provider || providerId || 'spotify',
+                provider: prev?.provider || providerFromUri(current.uri) || providerId || 'spotify',
                 trackId: prev?.uri === current.uri ? prev.trackId : current.uri.split(':').pop() || '',
                 uri: current.uri,
                 title: current.name,
                 artist: current.artists.join(', '),
                 albumArtUrl: current.albumArtUrl ?? prev?.albumArtUrl ?? null,
-                songId: prev?.uri === current.uri ? prev?.songId : prev?.songId,
-                lyrics: prev?.uri === current.uri ? prev?.lyrics : prev?.lyrics,
+                songId: prev?.songId,
+                lyrics: prev?.lyrics,
+                providerLinks: prev?.providerLinks,
+                preferredProvider: prev?.preferredProvider,
+                lastWorkingProvider: prev?.lastWorkingProvider,
             }));
         }
     }, [providerId]);
 
     useEffect(() => {
-        if (!musicConnected || !providerId) {
+        if (!musicConnected || connectedIds.length === 0) {
             restoredRef.current = false;
-            providerRef.current?.disconnect();
+            [...providersRef.current.keys()].forEach((id) => releaseProvider(id));
+            providersRef.current.clear();
             providerRef.current = null;
             setProviderReady(false);
             setPlaying(false);
@@ -316,48 +454,95 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        const provider = getActiveProvider(providerId);
-        if (!provider) {
-            return;
+        const activeSet = new Set(connectedIds);
+        const unsubscribers: Array<() => void> = [];
+        let cancelled = false;
+
+        // Tear down providers that are no longer active+connected (stops TIDAL ping etc.).
+        for (const id of [...providersRef.current.keys()]) {
+            if (!activeSet.has(id)) {
+                releaseProvider(id);
+                providersRef.current.delete(id);
+                if (providerRef.current?.id === id) {
+                    providerRef.current = null;
+                }
+            }
         }
 
-        providerRef.current = provider;
-        const unsubState = provider.onStateChange(applyState);
-        const unsubReady = provider.onReadyChange((isReady) => {
-            setProviderReady(isReady);
-            if (isReady) {
-                setError(null);
-            }
-        });
-        const unsubError = provider.onError((message) => setError(message));
-
-        let cancelled = false;
         void (async () => {
-            try {
-                await provider.setVolume(volumeRef.current);
-                await provider.connect();
-                if (!cancelled) {
-                    setProviderReady(provider.ready);
+            const connected: MusicProvider[] = [];
+
+            // Eagerly initialize only the preferred active provider.
+            // Other active providers connect on demand in ensureProviderForTrack.
+            const eagerId =
+                (providerId && activeSet.has(providerId) ? providerId : null) ??
+                connectedIds[0] ??
+                null;
+
+            const idsToWire = eagerId ? [eagerId] : [];
+
+            for (const id of idsToWire) {
+                if (cancelled) {
+                    return;
                 }
-            } catch (e) {
-                if (!cancelled) {
-                    setError(e instanceof Error ? e.message : 'Player-Fehler');
+
+                const provider = getProvider(id);
+                providersRef.current.set(id, provider);
+
+                unsubscribers.push(
+                    provider.onStateChange((state) => {
+                        if (providerRef.current?.id === provider.id) {
+                            applyState(state);
+                        }
+                    }),
+                );
+                unsubscribers.push(
+                    provider.onReadyChange((isReady) => {
+                        if (providerRef.current?.id === provider.id) {
+                            setProviderReady(isReady);
+                            if (isReady) {
+                                setError(null);
+                            }
+                        }
+                    }),
+                );
+                unsubscribers.push(provider.onError((message) => setError(message)));
+
+                try {
+                    await provider.setVolume(volumeRef.current);
+                    await provider.connect();
+                    connected.push(provider);
+                } catch (e) {
+                    if (!cancelled) {
+                        const label = providerLabel(id);
+                        const message =
+                            e instanceof Error ? e.message : `${label}-Player konnte nicht gestartet werden.`;
+                        setError(`${label}: ${message}`);
+                    }
                 }
             }
+
+            if (cancelled) {
+                return;
+            }
+
+            const preferred =
+                (eagerId && providersRef.current.get(eagerId)) ||
+                connected[0] ||
+                providersRef.current.values().next().value ||
+                null;
+            providerRef.current = preferred ?? null;
+            setProviderReady(Boolean(preferred?.ready));
         })();
 
         return () => {
             cancelled = true;
-            unsubState();
-            unsubReady();
-            unsubError();
-            provider.disconnect();
-            if (providerRef.current === provider) {
-                providerRef.current = null;
-            }
-            setProviderReady(false);
+            unsubscribers.forEach((fn) => fn());
+            // Keep active provider instances across StrictMode remounts; only release
+            // when the effect re-runs with an empty connected set or inactive ids.
         };
-    }, [musicConnected, providerId, applyState]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [musicConnected, connectedIds.join(','), providerId, applyState]);
 
     useEffect(() => {
         const timer = window.setInterval(() => {
@@ -372,11 +557,139 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return () => window.clearInterval(timer);
     }, [durationMs]);
 
-    const playEngine = useCallback(async (next: PlayerTrack, startAt: number) => {
-        const provider = providerRef.current;
-        if (!provider) {
-            throw new Error('Musik-Player ist noch nicht bereit.');
+    const ensureProviderForTrack = useCallback(async (next: PlayerTrack): Promise<{ provider: MusicProvider; track: PlayerTrack }> => {
+        // Honor the track as given (preferred is resolved earlier in songToPlayerTrack /
+        // resolveSongPlayback). Re-forcing preferred here breaks switchProvider().
+        let playable = normalizeTrack(next);
+
+        let needed = playable.provider;
+
+        if (!isProviderConnected(userRef.current, needed)) {
+            const fallback = await resolveFallbackTrack(playable, userRef.current);
+            if (!fallback) {
+                const alternatives = connectedProviderIds(userRef.current)
+                    .filter((id) => id !== needed)
+                    .map(providerLabel);
+                const hint =
+                    alternatives.length > 0
+                        ? ` Kein Treffer bei ${alternatives.join(', ')}.`
+                        : '';
+                throw new Error(
+                    `${providerLabel(needed)} ist nicht aktiv.${hint} Bitte einen Musikdienst in den Einstellungen aktivieren.`,
+                );
+            }
+            playable = fallback;
+            needed = playable.provider;
         }
+
+        let provider = providersRef.current.get(needed);
+        if (!provider) {
+            provider = getProvider(needed);
+            providersRef.current.set(needed, provider);
+            provider.onStateChange((state) => {
+                if (providerRef.current?.id === provider!.id) {
+                    applyState(state);
+                }
+            });
+            provider.onReadyChange((isReady) => {
+                if (providerRef.current?.id === provider!.id) {
+                    setProviderReady(isReady);
+                }
+            });
+            provider.onError((message) => setError(message));
+            await provider.setVolume(volumeRef.current);
+            await provider.connect();
+        }
+
+        if (providerRef.current && providerRef.current.id !== needed) {
+            try {
+                await providerRef.current.pause();
+            } catch {
+                // ignore
+            }
+        }
+
+        providerRef.current = provider;
+        setProviderReady(provider.ready);
+
+        if (!provider.ready) {
+            await provider.connect();
+        }
+
+        return { provider, track: playable };
+    }, [applyState]);
+
+    const currentListenedMs = useCallback((): number => {
+        const active = activePlayRef.current;
+        const anchor = playListenAnchorRef.current;
+        if (!active) {
+            return 0;
+        }
+        if (!anchor) {
+            return active.reportedMs;
+        }
+        let ms = anchor.baseMs;
+        if (anchor.playing) {
+            ms += Date.now() - anchor.at;
+        }
+        return Math.max(active.reportedMs, Math.floor(ms));
+    }, []);
+
+    const flushPlayProgress = useCallback(
+        async (options?: { completed?: boolean; clear?: boolean }) => {
+            const active = activePlayRef.current;
+            if (!active) {
+                return;
+            }
+
+            const listenedMs = currentListenedMs();
+            const completed = Boolean(options?.completed);
+            const shouldClear = Boolean(options?.clear);
+
+            if (playListenAnchorRef.current) {
+                playListenAnchorRef.current = {
+                    at: Date.now(),
+                    baseMs: listenedMs,
+                    playing: playListenAnchorRef.current.playing && !shouldClear,
+                };
+            }
+
+            const shouldReport = listenedMs > active.reportedMs || completed || shouldClear;
+            if (!shouldReport) {
+                if (shouldClear) {
+                    activePlayRef.current = null;
+                    playListenAnchorRef.current = null;
+                }
+                return;
+            }
+
+            active.reportedMs = listenedMs;
+
+            try {
+                await api.patch(
+                    `/songs/${active.songId}/plays/${active.playId}`,
+                    {
+                        listened_ms: listenedMs,
+                        duration_ms: durationMsRef.current > 0 ? Math.floor(durationMsRef.current) : undefined,
+                        completed,
+                    },
+                    { skipErrorToast: true },
+                );
+            } catch {
+                // non-blocking
+            }
+
+            if (shouldClear) {
+                activePlayRef.current = null;
+                playListenAnchorRef.current = null;
+            }
+        },
+        [currentListenedMs],
+    );
+
+    const playEngine = useCallback(async (next: PlayerTrack, startAt: number) => {
+        const { provider, track: playable } = await ensureProviderForTrack(next);
+        setTrack(playable);
 
         if (startAt > 0) {
             resumeGuardRef.current = {
@@ -387,8 +700,83 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             resumeGuardRef.current = null;
         }
 
-        await provider.play(normalizeTrack(next), startAt);
-    }, []);
+        await provider.play(playable, startAt);
+
+        const trackPlay = Boolean(playable.songId) && !syncingRemoteRef.current;
+        const isFreshStart = startAt < 2500;
+        const prev = activePlayRef.current;
+
+        if (trackPlay && playable.songId) {
+            if (prev && (prev.songId !== playable.songId || isFreshStart)) {
+                await flushPlayProgress({
+                    clear: true,
+                    completed: prev.songId === playable.songId,
+                });
+            }
+
+            if (isFreshStart || !activePlayRef.current || activePlayRef.current.songId !== playable.songId) {
+                void api
+                    .post<{ data: Song; play: SongPlay | null }>(
+                        `/songs/${playable.songId}/played`,
+                        {
+                            provider: playable.provider,
+                            provider_track_id: playable.trackId,
+                            provider_uri: playable.uri,
+                            album_art_url: playable.albumArtUrl,
+                            duration_ms: durationMsRef.current > 0 ? Math.floor(durationMsRef.current) : undefined,
+                            track: true,
+                        },
+                        { skipErrorToast: true },
+                    )
+                    .then(({ data }) => {
+                        if (!data.play?.id || trackRef.current?.songId !== playable.songId) {
+                            return;
+                        }
+                        activePlayRef.current = {
+                            songId: playable.songId!,
+                            playId: data.play.id,
+                            reportedMs: 0,
+                        };
+                        playListenAnchorRef.current = {
+                            at: Date.now(),
+                            baseMs: 0,
+                            playing: true,
+                        };
+                    })
+                    .catch(() => {
+                        // non-blocking
+                    });
+            } else {
+                // Same session continued (e.g. provider switch mid-track).
+                const listened = currentListenedMs();
+                playListenAnchorRef.current = {
+                    at: Date.now(),
+                    baseMs: listened,
+                    playing: true,
+                };
+            }
+        } else if (prev) {
+            // Room sync / no song id — stop tracking the previous local play.
+            void flushPlayProgress({ clear: true });
+        } else if (playable.songId && syncingRemoteRef.current) {
+            // Still enrich last-working provider without counting a play.
+            void api
+                .post(
+                    `/songs/${playable.songId}/played`,
+                    {
+                        provider: playable.provider,
+                        provider_track_id: playable.trackId,
+                        provider_uri: playable.uri,
+                        album_art_url: playable.albumArtUrl,
+                        track: false,
+                    },
+                    { skipErrorToast: true },
+                )
+                .catch(() => {
+                    // non-blocking
+                });
+        }
+    }, [ensureProviderForTrack, flushPlayProgress, currentListenedMs]);
 
     const playTrackInternal = useCallback(
         async (next: PlayerTrack, options?: { startPositionMs?: number }) => {
@@ -560,6 +948,84 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
         await playAtCursor({ ...currentQueue, cursor: 0 });
     }, [playAtCursor, controlsLocked]);
+
+    const switchProvider = useCallback(
+        async (provider: MusicProviderId) => {
+            if (controlsLocked) {
+                return;
+            }
+
+            const current = trackRef.current;
+            if (!current) {
+                return;
+            }
+            if (current.provider === provider) {
+                return;
+            }
+
+            let next = playerTrackForProvider(current, provider);
+            if (!next && current.songId) {
+                try {
+                    const { data } = await api.get<{ data: Song }>(`/songs/${current.songId}`);
+                    const resolved = songToPlayerTrack(data.data, userRef.current);
+                    if (resolved?.providerLinks) {
+                        setTrack((prev) =>
+                            prev && prev.songId === current.songId
+                                ? {
+                                      ...prev,
+                                      providerLinks: resolved.providerLinks,
+                                      preferredProvider: resolved.preferredProvider,
+                                      lastWorkingProvider: resolved.lastWorkingProvider,
+                                  }
+                                : prev,
+                        );
+                        next = playerTrackForProvider(
+                            {
+                                ...current,
+                                providerLinks: resolved.providerLinks,
+                                preferredProvider: resolved.preferredProvider,
+                                lastWorkingProvider: resolved.lastWorkingProvider,
+                            },
+                            provider,
+                        );
+                    }
+                } catch {
+                    // fall through
+                }
+            }
+
+            if (!next) {
+                setError(`Kein ${providerLabel(provider)}-Link für diesen Song.`);
+                return;
+            }
+
+            if (!isProviderConnected(userRef.current, provider)) {
+                setError(`${providerLabel(provider)} ist nicht aktiv. Bitte in den Einstellungen aktivieren.`);
+                return;
+            }
+
+            await playTrackInternal(next, { startPositionMs: positionMsRef.current });
+        },
+        [controlsLocked, playTrackInternal],
+    );
+
+    const attachSongProviders = useCallback((song: Song) => {
+        const resolved = songToPlayerTrack(song, userRef.current);
+        if (!resolved) {
+            return;
+        }
+        setTrack((prev) => {
+            if (!prev || prev.songId !== song.id) {
+                return prev;
+            }
+            return {
+                ...prev,
+                providerLinks: resolved.providerLinks,
+                preferredProvider: resolved.preferredProvider,
+                lastWorkingProvider: resolved.lastWorkingProvider,
+            };
+        });
+    }, []);
 
     const toggle = useCallback(async () => {
         if (controlsLocked) {
@@ -813,6 +1279,85 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }, [musicConnected, track, queue]);
 
     useEffect(() => {
+        const anchor = playListenAnchorRef.current;
+        if (!activePlayRef.current || !anchor) {
+            return;
+        }
+
+        if (playing && !anchor.playing) {
+            playListenAnchorRef.current = {
+                at: Date.now(),
+                baseMs: anchor.baseMs,
+                playing: true,
+            };
+            return;
+        }
+
+        if (!playing && anchor.playing) {
+            const listened = anchor.baseMs + (Date.now() - anchor.at);
+            playListenAnchorRef.current = {
+                at: Date.now(),
+                baseMs: listened,
+                playing: false,
+            };
+            void flushPlayProgress();
+        }
+    }, [playing, flushPlayProgress]);
+
+    useEffect(() => {
+        if (!playing || !activePlayRef.current) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            void flushPlayProgress();
+        }, 15000);
+
+        return () => window.clearInterval(timer);
+    }, [playing, flushPlayProgress, track?.songId]);
+
+    useEffect(() => {
+        const onUnload = () => {
+            const active = activePlayRef.current;
+            if (!active) {
+                return;
+            }
+            const listenedMs = currentListenedMs();
+            if (listenedMs <= active.reportedMs) {
+                return;
+            }
+            try {
+                const xsrf = document.cookie
+                    .match(/(?:^|; )XSRF-TOKEN=([^;]*)/)?.[1]
+                    ?.replace(/\+/g, ' ');
+                void fetch(`/api/songs/${active.songId}/plays/${active.playId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(xsrf
+                            ? { 'X-XSRF-TOKEN': decodeURIComponent(xsrf) }
+                            : {}),
+                    },
+                    body: JSON.stringify({
+                        listened_ms: listenedMs,
+                        duration_ms: durationMsRef.current > 0 ? Math.floor(durationMsRef.current) : undefined,
+                        completed: false,
+                    }),
+                    credentials: 'include',
+                    keepalive: true,
+                });
+            } catch {
+                // ignore
+            }
+        };
+
+        window.addEventListener('pagehide', onUnload);
+        return () => window.removeEventListener('pagehide', onUnload);
+    }, [currentListenedMs]);
+
+    useEffect(() => {
         if (!playing || !durationMs || durationMs < 1000) {
             return;
         }
@@ -826,6 +1371,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         advancingRef.current = true;
 
         void (async () => {
+            await flushPlayProgress({ clear: true, completed: true });
+
             if (onTrackEndedRef.current) {
                 onTrackEndedRef.current();
                 window.setTimeout(() => {
@@ -839,6 +1386,41 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 await providerRef.current?.resume();
                 setPlaying(true);
                 positionAnchorRef.current = { position: 0, at: Date.now(), playing: true };
+                // Count repeat as a fresh play.
+                const current = trackRef.current;
+                if (current?.songId && !syncingRemoteRef.current) {
+                    void api
+                        .post<{ data: Song; play: SongPlay | null }>(
+                            `/songs/${current.songId}/played`,
+                            {
+                                provider: current.provider,
+                                provider_track_id: current.trackId,
+                                provider_uri: current.uri,
+                                album_art_url: current.albumArtUrl,
+                                duration_ms: durationMsRef.current > 0 ? Math.floor(durationMsRef.current) : undefined,
+                                track: true,
+                            },
+                            { skipErrorToast: true },
+                        )
+                        .then(({ data }) => {
+                            if (!data.play?.id || trackRef.current?.songId !== current.songId) {
+                                return;
+                            }
+                            activePlayRef.current = {
+                                songId: current.songId,
+                                playId: data.play.id,
+                                reportedMs: 0,
+                            };
+                            playListenAnchorRef.current = {
+                                at: Date.now(),
+                                baseMs: 0,
+                                playing: true,
+                            };
+                        })
+                        .catch(() => {
+                            // ignore
+                        });
+                }
                 advancingRef.current = false;
                 return;
             }
@@ -863,7 +1445,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 advancingRef.current = false;
             }, 800);
         })();
-    }, [positionMs, durationMs, playing, seek, playNext]);
+    }, [positionMs, durationMs, playing, seek, playNext, flushPlayProgress]);
 
     const canPrev = Boolean(queue && queue.tracks.length > 0) && !controlsLocked;
     const canNext = Boolean(queue && queue.tracks.length > 0) && !controlsLocked;
@@ -887,6 +1469,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             playPlaylist,
             playNext,
             playPrevious,
+            switchProvider,
+            attachSongProviders,
             toggle,
             setVolume,
             seek,
@@ -914,6 +1498,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             playPlaylist,
             playNext,
             playPrevious,
+            switchProvider,
+            attachSongProviders,
             toggle,
             setVolume,
             seek,

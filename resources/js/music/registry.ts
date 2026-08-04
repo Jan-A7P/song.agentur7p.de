@@ -1,5 +1,6 @@
 import type { MusicProvider } from './MusicProvider';
 import { SpotifyProvider } from './providers/SpotifyProvider';
+import { TidalProvider } from './providers/TidalProvider';
 import type { MusicProviderId } from './types';
 
 const instances = new Map<MusicProviderId, MusicProvider>();
@@ -14,12 +15,26 @@ export function getProvider(id: MusicProviderId): MusicProvider {
         case 'spotify':
             provider = new SpotifyProvider();
             break;
+        case 'tidal':
+            // Class construction is cheap; the TIDAL Player SDK loads only on connect().
+            provider = new TidalProvider();
+            break;
         default:
             throw new Error(`Unbekannter Musik-Anbieter: ${id as string}`);
     }
 
     instances.set(id, provider);
     return provider;
+}
+
+/** Disconnect and drop the singleton so inactive providers stop all SDK activity. */
+export function releaseProvider(id: MusicProviderId): void {
+    const provider = instances.get(id);
+    if (!provider) {
+        return;
+    }
+    provider.disconnect();
+    instances.delete(id);
 }
 
 export function getActiveProvider(activeId: MusicProviderId | null | undefined): MusicProvider | null {

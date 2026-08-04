@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\MusicProvider;
 use App\Models\Song;
+use App\Models\SongProvider;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -20,6 +21,14 @@ class SongCatalogService
         ?string $artist = null,
     ): ?Song {
         if (filled($provider) && filled($providerTrackId)) {
+            $byLink = SongProvider::query()
+                ->where('provider', $provider)
+                ->where('provider_track_id', $providerTrackId)
+                ->first();
+            if ($byLink) {
+                return Song::query()->find($byLink->song_id);
+            }
+
             $byProvider = Song::query()
                 ->where('provider', $provider)
                 ->where('provider_track_id', $providerTrackId)
@@ -43,16 +52,16 @@ class SongCatalogService
     }
 
     /**
-     * Create a new song or return/merge into an existing unique catalog entry.
-     *
      * @param  array{
      *   title: string,
      *   artist: string,
      *   lyrics?: string|null,
      *   provider?: string|null,
+     *   preferred_provider?: string|null,
      *   provider_track_id?: string|null,
      *   provider_uri?: string|null,
-     *   album_art_url?: string|null
+     *   album_art_url?: string|null,
+     *   providers?: list<array{provider: string, provider_track_id: string, provider_uri: string, album_art_url?: string|null}>
      * }  $attributes
      * @return array{song: Song, created: bool}
      */
@@ -60,10 +69,14 @@ class SongCatalogService
     {
         return DB::transaction(function () use ($user, $attributes) {
             $attributes = $this->normalizeProviderAttributes($attributes);
+            $links = $this->extractProviderLinks($attributes);
+
+            $lookupProvider = $attributes['provider'] ?? ($links[0]['provider'] ?? null);
+            $lookupTrackId = $attributes['provider_track_id'] ?? ($links[0]['provider_track_id'] ?? null);
 
             $existing = $this->findExisting(
-                $attributes['provider'] ?? null,
-                $attributes['provider_track_id'] ?? null,
+                $lookupProvider,
+                $lookupTrackId,
                 $attributes['title'] ?? null,
                 $attributes['artist'] ?? null,
             );
@@ -71,47 +84,71 @@ class SongCatalogService
             if ($existing) {
                 $this->mergeProviderData($existing, $attributes);
 
-                return ['song' => $existing->fresh()->load('user:id,name'), 'created' => false];
+                return ['song' => $existing->fresh()->load(['user:id,name', 'providers']), 'created' => false];
             }
 
             $song = $user->songs()->create([
                 'title' => $attributes['title'],
                 'artist' => $attributes['artist'],
                 'lyrics' => $attributes['lyrics'] ?? '',
-                'provider' => $attributes['provider'] ?? null,
-                'provider_track_id' => $attributes['provider_track_id'] ?? null,
-                'provider_uri' => $attributes['provider_uri'] ?? null,
+                'provider' => null,
+                'preferred_provider' => $attributes['preferred_provider'] ?? null,
+                'provider_track_id' => null,
+                'provider_uri' => null,
                 'album_art_url' => $attributes['album_art_url'] ?? null,
             ]);
 
-            return ['song' => $song->load('user:id,name'), 'created' => true];
+            foreach ($links as $link) {
+                $this->upsertProviderLink($song, $link);
+            }
+
+            if ($links === [] && filled($attributes['provider'] ?? null) && filled($attributes['provider_track_id'] ?? null)) {
+                $this->upsertProviderLink($song, [
+                    'provider' => (string) $attributes['provider'],
+                    'provider_track_id' => (string) $attributes['provider_track_id'],
+                    'provider_uri' => (string) ($attributes['provider_uri'] ?? ''),
+                    'album_art_url' => $attributes['album_art_url'] ?? null,
+                ]);
+            }
+
+            $this->syncPrimaryFromPreferred($song->fresh());
+
+            return ['song' => $song->fresh()->load(['user:id,name', 'providers']), 'created' => true];
         });
     }
 
     /**
-     * Merge provider IDs / artwork / empty lyrics into an existing song (non-destructive).
-     *
      * @param  array<string, mixed>  $attributes
      */
     public function mergeProviderData(Song $song, array $attributes): Song
     {
         $attributes = $this->normalizeProviderAttributes($attributes);
-        $updates = [];
+        $links = $this->extractProviderLinks($attributes);
 
-        $incomingProvider = $attributes['provider'] ?? null;
-        $incomingTrackId = $attributes['provider_track_id'] ?? null;
-        $incomingUri = $attributes['provider_uri'] ?? null;
-
-        if (filled($incomingProvider) && filled($incomingTrackId) && ! filled($song->provider_track_id)) {
-            $updates['provider'] = $incomingProvider;
-            $updates['provider_track_id'] = $incomingTrackId;
+        foreach ($links as $link) {
+            $this->upsertProviderLink($song, $link);
         }
 
-        if (filled($incomingUri) && ! filled($song->provider_uri)) {
-            $updates['provider_uri'] = $incomingUri;
-            if (filled($incomingProvider) && ! filled($song->provider)) {
-                $updates['provider'] = $incomingProvider;
-            }
+        // Legacy single-provider payload: add/merge without wiping other links.
+        if (
+            $links === []
+            && filled($attributes['provider'] ?? null)
+            && filled($attributes['provider_track_id'] ?? null)
+            && filled($attributes['provider_uri'] ?? null)
+        ) {
+            $this->upsertProviderLink($song, [
+                'provider' => (string) $attributes['provider'],
+                'provider_track_id' => (string) $attributes['provider_track_id'],
+                'provider_uri' => (string) $attributes['provider_uri'],
+                'album_art_url' => $attributes['album_art_url'] ?? null,
+            ]);
+        }
+
+        $updates = [];
+
+        if (array_key_exists('preferred_provider', $attributes)) {
+            $preferred = $attributes['preferred_provider'];
+            $updates['preferred_provider'] = filled($preferred) ? strtolower((string) $preferred) : null;
         }
 
         if (filled($attributes['album_art_url'] ?? null) && ! filled($song->album_art_url)) {
@@ -127,7 +164,80 @@ class SongCatalogService
             $song->forceFill($updates)->save();
         }
 
-        return $song;
+        $this->syncPrimaryFromPreferred($song->fresh());
+
+        return $song->fresh()->load('providers');
+    }
+
+    /**
+     * Replace all provider links (used on explicit song update with providers array).
+     *
+     * @param  list<array{provider: string, provider_track_id: string, provider_uri: string, album_art_url?: string|null}>  $links
+     */
+    public function syncProviderLinks(Song $song, array $links, ?string $preferredProvider = null): Song
+    {
+        return DB::transaction(function () use ($song, $links, $preferredProvider) {
+            $normalized = [];
+            foreach ($links as $link) {
+                $row = $this->normalizeProviderAttributes($link);
+                if (! filled($row['provider'] ?? null) || ! filled($row['provider_track_id'] ?? null) || ! filled($row['provider_uri'] ?? null)) {
+                    continue;
+                }
+                $normalized[] = [
+                    'provider' => (string) $row['provider'],
+                    'provider_track_id' => (string) $row['provider_track_id'],
+                    'provider_uri' => (string) $row['provider_uri'],
+                    'album_art_url' => $row['album_art_url'] ?? null,
+                ];
+            }
+
+            $keep = collect($normalized)->pluck('provider')->all();
+            $song->providers()->whereNotIn('provider', $keep ?: ['__none__'])->delete();
+
+            foreach ($normalized as $link) {
+                $this->upsertProviderLink($song, $link);
+            }
+
+            $preferred = $preferredProvider;
+            if ($preferred === null && $normalized !== []) {
+                $preferred = $normalized[0]['provider'];
+            }
+            if ($preferred !== null && ! in_array($preferred, $keep, true)) {
+                $preferred = $normalized[0]['provider'] ?? null;
+            }
+
+            $song->forceFill([
+                'preferred_provider' => $preferred,
+            ])->save();
+
+            $this->syncPrimaryFromPreferred($song->fresh());
+
+            return $song->fresh()->load('providers');
+        });
+    }
+
+    public function markLastWorking(Song $song, string $provider): Song
+    {
+        $provider = strtolower($provider);
+        $allowed = collect(MusicProvider::cases())->map->value->all();
+        if (! in_array($provider, $allowed, true)) {
+            throw ValidationException::withMessages([
+                'provider' => ['Unbekannter Musik-Anbieter.'],
+            ]);
+        }
+
+        if (! $song->linkFor($provider)) {
+            throw ValidationException::withMessages([
+                'provider' => ['Dieser Provider ist für den Song nicht verknüpft.'],
+            ]);
+        }
+
+        // Never overwrite the user's preferred provider — only remember what last worked.
+        $song->forceFill([
+            'last_working_provider' => $provider,
+        ])->save();
+
+        return $song->fresh()->load('providers');
     }
 
     /**
@@ -137,12 +247,122 @@ class SongCatalogService
      */
     public function enrichFromPlayable(Song $song, string $provider, array $playable): void
     {
-        $this->mergeProviderData($song, [
+        $provider = strtolower($provider);
+
+        $this->upsertProviderLink($song, [
             'provider' => $provider,
-            'provider_track_id' => $playable['id'] ?? null,
-            'provider_uri' => $playable['uri'] ?? null,
+            'provider_track_id' => (string) ($playable['id'] ?? ''),
+            'provider_uri' => (string) ($playable['uri'] ?? ''),
             'album_art_url' => $playable['album_art_url'] ?? null,
         ]);
+
+        $song->forceFill([
+            'last_working_provider' => $provider,
+        ])->save();
+
+        // Only set preferred when the song has none yet — never steal the user's choice.
+        $fresh = $song->fresh();
+        if ($fresh && ! filled($fresh->preferred_provider)) {
+            $fresh->forceFill(['preferred_provider' => $provider])->save();
+        }
+
+        $this->syncPrimaryFromPreferred($song->fresh());
+    }
+
+    /**
+     * @param  array{provider: string, provider_track_id: string, provider_uri: string, album_art_url?: string|null}  $link
+     */
+    public function upsertProviderLink(Song $song, array $link): SongProvider
+    {
+        if (! filled($link['provider']) || ! filled($link['provider_track_id']) || ! filled($link['provider_uri'])) {
+            throw ValidationException::withMessages([
+                'providers' => ['Provider-Link unvollständig.'],
+            ]);
+        }
+
+        $provider = strtolower((string) $link['provider']);
+        $allowed = collect(MusicProvider::cases())->map->value->all();
+        if (! in_array($provider, $allowed, true)) {
+            throw ValidationException::withMessages([
+                'providers' => ['Unbekannter Musik-Anbieter.'],
+            ]);
+        }
+
+        // Move uniqueness conflicts from other songs onto this catalog entry by deleting foreign dupes.
+        SongProvider::query()
+            ->where('provider', $provider)
+            ->where('provider_track_id', $link['provider_track_id'])
+            ->where('song_id', '!=', $song->id)
+            ->delete();
+
+        return SongProvider::query()->updateOrCreate(
+            [
+                'song_id' => $song->id,
+                'provider' => $provider,
+            ],
+            [
+                'provider_track_id' => (string) $link['provider_track_id'],
+                'provider_uri' => (string) $link['provider_uri'],
+                'album_art_url' => $link['album_art_url'] ?? null,
+            ],
+        );
+    }
+
+    public function syncPrimaryFromPreferred(Song $song): void
+    {
+        $song->load('providers');
+        $preferred = $song->preferred_provider;
+        $link = $song->linkFor($preferred) ?? $song->providers->first();
+
+        if (! $link) {
+            $song->forceFill([
+                'provider' => null,
+                'provider_track_id' => null,
+                'provider_uri' => null,
+                'preferred_provider' => null,
+            ])->save();
+
+            return;
+        }
+
+        $song->forceFill([
+            'provider' => $link->provider,
+            'provider_track_id' => $link->provider_track_id,
+            'provider_uri' => $link->provider_uri,
+            'preferred_provider' => $song->preferred_provider ?: $link->provider,
+            'album_art_url' => $song->album_art_url ?: $link->album_art_url,
+        ])->save();
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     * @return list<array{provider: string, provider_track_id: string, provider_uri: string, album_art_url?: string|null}>
+     */
+    private function extractProviderLinks(array $attributes): array
+    {
+        $raw = $attributes['providers'] ?? null;
+        if (! is_array($raw)) {
+            return [];
+        }
+
+        $links = [];
+        foreach ($raw as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $normalized = $this->normalizeProviderAttributes($row);
+            if (! filled($normalized['provider'] ?? null) || ! filled($normalized['provider_track_id'] ?? null) || ! filled($normalized['provider_uri'] ?? null)) {
+                continue;
+            }
+            $links[] = [
+                'provider' => (string) $normalized['provider'],
+                'provider_track_id' => (string) $normalized['provider_track_id'],
+                'provider_uri' => (string) $normalized['provider_uri'],
+                'album_art_url' => $normalized['album_art_url'] ?? null,
+            ];
+        }
+
+        return $links;
     }
 
     /**
@@ -162,12 +382,25 @@ class SongCatalogService
             $attributes['provider'] = $provider;
         }
 
-        // If track id/uri present without provider, default to spotify (current sole adapter).
+        if (isset($attributes['preferred_provider']) && filled($attributes['preferred_provider'])) {
+            $preferred = strtolower((string) $attributes['preferred_provider']);
+            $allowed = collect(MusicProvider::cases())->map->value->all();
+            if (! in_array($preferred, $allowed, true)) {
+                throw ValidationException::withMessages([
+                    'preferred_provider' => ['Unbekannter Musik-Anbieter.'],
+                ]);
+            }
+            $attributes['preferred_provider'] = $preferred;
+        }
+
         if (
             (! isset($attributes['provider']) || ! filled($attributes['provider']))
             && (filled($attributes['provider_track_id'] ?? null) || filled($attributes['provider_uri'] ?? null))
         ) {
-            $attributes['provider'] = MusicProvider::Spotify->value;
+            $uri = (string) ($attributes['provider_uri'] ?? '');
+            $attributes['provider'] = str_starts_with($uri, 'tidal:')
+                ? MusicProvider::Tidal->value
+                : MusicProvider::Spotify->value;
         }
 
         return $attributes;

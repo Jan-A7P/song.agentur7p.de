@@ -55,4 +55,9 @@ class SpotifyMusicProvider implements MusicProviderContract
     {
         $this->spotify->playUri($user, $uri, $deviceId, $positionMs);
     }
+
+    public function clientId(): ?string
+    {
+        return null;
+    }
 }

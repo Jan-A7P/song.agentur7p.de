@@ -20,10 +20,12 @@ import { usePlayer, formatTime } from '@/context/player-context';
 import { useAuth } from '@/context/auth-context';
 import { useRoom } from '@/context/room-context';
 import { findActiveLrcIndex, parseLrc } from '@/lib/lrc';
-import { hasMusicConnected } from '@/lib/music';
+import { hasMusicConnected, isProviderConnected, providerLabel } from '@/lib/music';
 import api from '@/lib/api';
 import type { Song } from '@/types';
+import type { MusicProviderId } from '@/music/types';
 import { Button } from '@/components/ui/button';
+import { FavoriteButton } from '@/components/FavoriteButton';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 
@@ -100,6 +102,8 @@ export function PersistentPlayerBar() {
         seek,
         playNext,
         playPrevious,
+        switchProvider,
+        attachSongProviders,
         toggleShuffle,
         toggleRepeatOne,
     } = usePlayer();
@@ -109,6 +113,7 @@ export function PersistentPlayerBar() {
     const [scrubbing, setScrubbing] = useState(false);
     const [scrubValue, setScrubValue] = useState(0);
     const [fetchedLyrics, setFetchedLyrics] = useState<string | null>(null);
+    const [favorited, setFavorited] = useState(false);
     const [lyricsMode, setLyricsMode] = useState<LyricsMode>(readLyricsMode);
     const [collapsed, setCollapsed] = useState(readCollapsed);
     const barRef = useRef<HTMLDivElement | null>(null);
@@ -171,34 +176,42 @@ export function PersistentPlayerBar() {
     useEffect(() => {
         if (!track?.songId) {
             setFetchedLyrics(null);
+            setFavorited(false);
             fetchedForSongId.current = null;
             return;
         }
 
-        if (typeof track.lyrics === 'string') {
-            setFetchedLyrics(null);
-            fetchedForSongId.current = track.songId;
-            return;
-        }
-
-        if (fetchedForSongId.current === track.songId) {
-            return;
-        }
-
         const songId = track.songId;
+        const needsLyrics = typeof track.lyrics !== 'string';
+        const needsProviders = !track.providerLinks || track.providerLinks.length === 0;
+        const alreadyFetched = fetchedForSongId.current === songId;
+
+        if (alreadyFetched && !needsLyrics && !needsProviders) {
+            return;
+        }
+
         let cancelled = false;
 
         void (async () => {
             try {
                 const { data } = await api.get<{ data: Song }>(`/songs/${songId}`);
-                if (!cancelled) {
-                    fetchedForSongId.current = songId;
+                if (cancelled) {
+                    return;
+                }
+                fetchedForSongId.current = songId;
+                if (needsLyrics || typeof track.lyrics !== 'string') {
                     setFetchedLyrics(data.data.lyrics ?? '');
+                }
+                setFavorited(Boolean(data.data.is_favorited));
+                if (needsProviders || !track.providerLinks?.length) {
+                    attachSongProviders(data.data);
                 }
             } catch {
                 if (!cancelled) {
                     fetchedForSongId.current = songId;
-                    setFetchedLyrics('');
+                    if (needsLyrics) {
+                        setFetchedLyrics('');
+                    }
                 }
             }
         })();
@@ -206,7 +219,16 @@ export function PersistentPlayerBar() {
         return () => {
             cancelled = true;
         };
-    }, [track?.songId, track?.lyrics, track?.uri]);
+    }, [track?.songId, track?.lyrics, track?.uri, track?.providerLinks, attachSongProviders]);
+
+    const switchableProviders = useMemo(() => {
+        if (!track?.providerLinks?.length) {
+            return [] as MusicProviderId[];
+        }
+        return track.providerLinks
+            .map((l) => l.provider)
+            .filter((id) => isProviderConnected(user, id));
+    }, [track?.providerLinks, user]);
 
     const lyricsSource = typeof track?.lyrics === 'string' ? track.lyrics : fetchedLyrics;
     const parsedLyrics = useMemo(() => {
@@ -296,7 +318,7 @@ export function PersistentPlayerBar() {
                 />
             )}
 
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
                 {track.songId ? (
                     <Link
                         to={`/songs/${track.songId}`}
@@ -320,7 +342,46 @@ export function PersistentPlayerBar() {
                 <p className={cn('truncate text-muted', collapsed ? 'text-xs' : 'text-xs sm:text-sm')}>
                     {track.artist}
                 </p>
+                {switchableProviders.length > 1 && (
+                    <div className={cn('flex flex-wrap gap-1', collapsed ? 'mt-0.5' : 'mt-1')}>
+                        {switchableProviders.map((provider) => {
+                            const active = track.provider === provider;
+                            const preferred = track.preferredProvider === provider;
+                            return (
+                                <button
+                                    key={provider}
+                                    type="button"
+                                    disabled={playbackLocked || active}
+                                    onClick={() => void switchProvider(provider)}
+                                    className={cn(
+                                        'rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition',
+                                        active
+                                            ? 'border-accent/30 bg-accent/15 text-accent'
+                                            : 'border-line bg-paper-2 text-muted hover:border-accent/30 hover:text-ink',
+                                        playbackLocked && 'opacity-50',
+                                    )}
+                                    title={
+                                        preferred
+                                            ? `${providerLabel(provider)} (bevorzugt)`
+                                            : `Mit ${providerLabel(provider)} abspielen`
+                                    }
+                                >
+                                    {providerLabel(provider)}
+                                    {preferred ? ' ★' : ''}
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
+
+            {track.songId ? (
+                <FavoriteButton
+                    songId={track.songId}
+                    favorited={favorited}
+                    onChange={setFavorited}
+                />
+            ) : null}
         </div>
     );
 

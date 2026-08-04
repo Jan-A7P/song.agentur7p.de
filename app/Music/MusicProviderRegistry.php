@@ -5,12 +5,18 @@ namespace App\Music;
 use App\Contracts\MusicProviderContract;
 use App\Enums\MusicProvider;
 use App\Models\User;
+use App\Services\MusicConnectionService;
 use App\Services\SpotifyService;
+use App\Services\TidalService;
 use InvalidArgumentException;
 
 class MusicProviderRegistry
 {
-    public function __construct(private SpotifyService $spotify) {}
+    public function __construct(
+        private SpotifyService $spotify,
+        private TidalService $tidal,
+        private MusicConnectionService $connections,
+    ) {}
 
     public function resolve(string|MusicProvider $provider): MusicProviderContract
     {
@@ -24,6 +30,7 @@ class MusicProviderRegistry
 
         return match ($enum) {
             MusicProvider::Spotify => new SpotifyMusicProvider($this->spotify),
+            MusicProvider::Tidal => new TidalMusicProvider($this->tidal),
         };
     }
 
@@ -49,8 +56,6 @@ class MusicProviderRegistry
             ? $provider
             : MusicProvider::from(strtolower((string) $provider));
 
-        return match ($enum) {
-            MusicProvider::Spotify => $user->hasSpotifyConnected(),
-        };
+        return $this->connections->isConnected($user, $enum);
     }
 }

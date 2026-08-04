@@ -24,6 +24,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/songs', [SongController::class, 'store']);
     Route::put('/songs/{song}', [SongController::class, 'update']);
     Route::patch('/songs/{song}', [SongController::class, 'update']);
+    Route::post('/songs/{song}/played', [SongController::class, 'markPlayed']);
+    Route::patch('/songs/{song}/plays/{play}', [SongController::class, 'updatePlay']);
+    Route::post('/songs/{song}/favorite', [SongController::class, 'favorite']);
+    Route::delete('/songs/{song}/favorite', [SongController::class, 'unfavorite']);
     Route::delete('/songs/{song}', [SongController::class, 'destroy']);
 
     Route::post('/playlists', [PlaylistController::class, 'store']);
@@ -41,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/music/{provider}/playlists', [MusicController::class, 'playlists']);
     Route::post('/music/{provider}/playlists/import', [MusicController::class, 'importPlaylist']);
     Route::post('/music/{provider}/play', [MusicController::class, 'play']);
+    Route::post('/music/{provider}/enabled', [MusicController::class, 'setEnabled']);
     Route::post('/music/{provider}/disconnect', [MusicController::class, 'disconnect']);
 
     Route::get('/lyrics/lookup', [LyricsController::class, 'lookup']);

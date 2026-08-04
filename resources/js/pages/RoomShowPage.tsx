@@ -17,6 +17,7 @@ import { usePlayer, formatTime } from '@/context/player-context';
 import { useRoom } from '@/context/room-context';
 import api from '@/lib/api';
 import type { Paginated, Song } from '@/types';
+import { songIsPlayable } from '@/lib/playable';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert } from '@/components/ui/alert';
@@ -78,7 +79,7 @@ export function RoomShowPage() {
         const timer = window.setTimeout(async () => {
             try {
                 const { data } = await api.get<Paginated<Song>>('/songs', { params: { q: songQuery } });
-                setSongResults(data.data.filter((s) => Boolean(s.provider_uri)).slice(0, 8));
+                setSongResults(data.data.filter((s) => songIsPlayable(s)).slice(0, 8));
             } catch {
                 setSongResults([]);
             }

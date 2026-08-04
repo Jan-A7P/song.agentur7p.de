@@ -1,4 +1,11 @@
-export type MusicProviderId = 'spotify';
+export type MusicProviderId = 'spotify' | 'tidal';
+
+export type PlayableProviderLink = {
+    provider: MusicProviderId;
+    trackId: string;
+    uri: string;
+    albumArtUrl?: string | null;
+};
 
 export type PlayableTrack = {
     provider: MusicProviderId;
@@ -9,6 +16,10 @@ export type PlayableTrack = {
     albumArtUrl: string | null;
     songId?: number;
     lyrics?: string | null;
+    /** All stored provider links for this song (for fallback + mini-player switch). */
+    providerLinks?: PlayableProviderLink[];
+    preferredProvider?: MusicProviderId | null;
+    lastWorkingProvider?: MusicProviderId | null;
 };
 
 export type ProviderPlaybackState = {

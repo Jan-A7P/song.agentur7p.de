@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'token_expires_at',
     'external_user_id',
     'sort_order',
+    'enabled',
     'connected_at',
 ])]
 class MusicConnection extends Model
@@ -32,7 +33,18 @@ class MusicConnection extends Model
             'access_token' => 'encrypted',
             'refresh_token' => 'encrypted',
             'sort_order' => 'integer',
+            'enabled' => 'boolean',
         ];
+    }
+
+    public function isLinked(): bool
+    {
+        return filled($this->refresh_token);
+    }
+
+    public function isEnabled(): bool
+    {
+        return $this->isLinked() && (bool) $this->enabled;
     }
 
     public function providerEnum(): ?MusicProvider

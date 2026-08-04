@@ -27,6 +27,9 @@ export default defineConfig({
             '@': path.resolve('resources/js'),
         },
     },
+    optimizeDeps: {
+        include: ['shaka-player', '@tidal-music/player', '@tidal-music/event-producer'],
+    },
     server: {
         watch: {
             ignored: ['**/storage/framework/views/**'],
