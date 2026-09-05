@@ -30,11 +30,11 @@ class LyricsController extends Controller
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 404);
         } catch (Throwable $e) {
-            return response()->json(['message' => 'Songtext-Suche fehlgeschlagen.'], 502);
+            return response()->json(['message' => __('Lyrics search failed.')], 502);
         }
 
         if ($result === null) {
-            return response()->json(['message' => 'Kein Songtext gefunden.'], 404);
+            return response()->json(['message' => __('No lyrics found.')], 404);
         }
 
         return response()->json([

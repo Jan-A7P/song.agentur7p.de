@@ -1,3 +1,5 @@
+import { t } from '@/i18n';
+
 type ToastVariant = 'error' | 'success' | 'default';
 
 export type ToastItem = {
@@ -80,7 +82,7 @@ export function clearToasts(): void {
     emit();
 }
 
-export function errorMessage(err: unknown, fallback = 'Etwas ist schiefgelaufen.'): string {
+export function errorMessage(err: unknown, fallback?: string): string {
     if (typeof err === 'string' && err.trim()) {
         return err;
     }
@@ -115,12 +117,12 @@ export function errorMessage(err: unknown, fallback = 'Etwas ist schiefgelaufen.
     if (err instanceof Error && err.message) {
         return err.message;
     }
-    return fallback;
+    return fallback ?? t('errors.generic');
 }
 
 export const toast = {
-    error(message: string, title = 'Fehler') {
-        return push('error', message, title);
+    error(message: string, title?: string) {
+        return push('error', message, title ?? t('common.error'));
     },
     success(message: string, title?: string) {
         return push('success', message, title);
@@ -128,12 +130,12 @@ export const toast = {
     info(message: string, title?: string) {
         return push('default', message, title);
     },
-    fromError(err: unknown, fallback = 'Etwas ist schiefgelaufen.', title = 'Fehler') {
+    fromError(err: unknown, fallback?: string, title?: string) {
         const message = errorMessage(err, fallback);
         if (!message) {
             return null;
         }
-        return push('error', message, title);
+        return push('error', message, title ?? t('common.error'));
     },
     dismiss: dismissToast,
     clear: clearToasts,

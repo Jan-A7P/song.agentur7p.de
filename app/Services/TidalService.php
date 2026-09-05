@@ -25,12 +25,8 @@ class TidalService
      * @see https://developer.tidal.com/documentation/api-sdk/api-sdk-authorization
      */
     public const SCOPES = [
-//        'user.read',
-//        'search.read',
         'playlists.read',
-//        'collection.read',
         'playback',
-//        'entitlements.read',
     ];
 
     public function authorizationUrl(string $state, string $codeChallenge, bool $forceConsent = false): string
@@ -111,7 +107,7 @@ class TidalService
         }
 
         if (! $connection->isEnabled()) {
-            throw new RuntimeException('TIDAL ist deaktiviert. Aktiviere den Dienst in den Einstellungen.');
+            throw new RuntimeException(__('TIDAL is disabled. Enable the service in Settings.'));
         }
 
         if ($connection->isTokenFresh() && filled($connection->access_token)) {
@@ -245,7 +241,7 @@ class TidalService
         $userId = $connection?->external_user_id;
 
         if (! filled($userId)) {
-            throw new RuntimeException('TIDAL user id fehlt. Bitte neu verbinden.');
+            throw new RuntimeException(__('TIDAL user id missing. Please reconnect.'));
         }
 
         $response = Http::withToken($token)
@@ -460,8 +456,22 @@ class TidalService
 
     private function parseIsoDurationMs(mixed $value): ?int
     {
+        if (is_int($value) || is_float($value)) {
+            $number = (int) $value;
+            if ($number <= 0) {
+                return null;
+            }
+
+            // Tidal sometimes sends seconds, sometimes milliseconds.
+            return $number < 10_000 ? $number * 1000 : $number;
+        }
+
         if (! is_string($value) || $value === '') {
             return null;
+        }
+
+        if (is_numeric($value)) {
+            return $this->parseIsoDurationMs((int) $value);
         }
 
         try {
@@ -470,7 +480,9 @@ class TidalService
             return null;
         }
 
-        return (($interval->h * 3600) + ($interval->i * 60) + $interval->s) * 1000;
+        $seconds = ($interval->h * 3600) + ($interval->i * 60) + $interval->s + $interval->f;
+
+        return $seconds > 0 ? (int) round($seconds * 1000) : null;
     }
 
     private function clientId(): string

@@ -28,13 +28,13 @@ class SpotifyService
         'playlist-read-collaborative',
     ];
 
-    public function authorizationUrl(string $state, bool $forceConsent = false): string
+    public function authorizationUrl(string $state, bool $forceConsent = false, ?string $redirectUri = null): string
     {
         $params = [
             'response_type' => 'code',
             'client_id' => $this->clientId(),
             'scope' => implode(' ', self::SCOPES),
-            'redirect_uri' => $this->redirectUri(),
+            'redirect_uri' => $redirectUri ?? $this->redirectUri(),
             'state' => $state,
         ];
 
@@ -48,14 +48,14 @@ class SpotifyService
     /**
      * @return array{access_token: string, refresh_token?: string, expires_in: int}
      */
-    public function exchangeCode(string $code): array
+    public function exchangeCode(string $code, ?string $redirectUri = null): array
     {
         $response = Http::asForm()
             ->withBasicAuth($this->clientId(), $this->clientSecret())
             ->post(self::TOKEN_URL, [
                 'grant_type' => 'authorization_code',
                 'code' => $code,
-                'redirect_uri' => $this->redirectUri(),
+                'redirect_uri' => $redirectUri ?? $this->redirectUri(),
             ]);
 
         if ($response->failed()) {
@@ -84,7 +84,7 @@ class SpotifyService
         }
 
         if (! $connection->isEnabled()) {
-            throw new RuntimeException('Spotify ist deaktiviert. Aktiviere den Dienst in den Einstellungen.');
+            throw new RuntimeException(__('Spotify is disabled. Enable the service in Settings.'));
         }
 
         if ($connection->isTokenFresh() && filled($connection->access_token)) {
@@ -170,6 +170,29 @@ class SpotifyService
                 'duration_ms' => isset($track['duration_ms']) ? (int) $track['duration_ms'] : null,
             ];
         })->all();
+    }
+
+    public function getTrackDurationMs(string $trackId): ?int
+    {
+        $trackId = trim($trackId);
+        if ($trackId === '') {
+            return null;
+        }
+
+        try {
+            $token = $this->getClientCredentialsToken();
+        } catch (RuntimeException) {
+            return null;
+        }
+
+        $response = Http::withToken($token)->get(self::API_URL.'/tracks/'.$trackId);
+        if ($response->failed()) {
+            return null;
+        }
+
+        $duration = (int) ($response->json('duration_ms') ?? 0);
+
+        return $duration > 0 ? $duration : null;
     }
 
     /**
@@ -353,6 +376,55 @@ class SpotifyService
     public function isConfigured(): bool
     {
         return filled($this->clientId()) && filled($this->clientSecret()) && filled($this->redirectUri());
+    }
+
+    public function isLoginConfigured(): bool
+    {
+        return filled($this->clientId()) && filled($this->clientSecret()) && filled($this->loginRedirectUri());
+    }
+
+    public function loginRedirectUri(): string
+    {
+        return (string) config('services.spotify.login_redirect', config('services.spotify.redirect'));
+    }
+
+    /**
+     * @return array{id: string, email: string, name: string, avatar: string|null}
+     */
+    public function fetchProfile(string $accessToken): array
+    {
+        $response = Http::withToken($accessToken)->get(self::API_URL.'/me');
+
+        if ($response->failed()) {
+            throw new RuntimeException('Spotify profile failed: '.$response->body());
+        }
+
+        $id = $response->json('id');
+        $email = $response->json('email');
+        $name = $response->json('display_name') ?: 'Spotify User';
+        $images = $response->json('images');
+        $avatar = null;
+        if (is_array($images) && count($images) > 0) {
+            $first = $images[0]['url'] ?? null;
+            if (is_string($first) && $first !== '') {
+                $avatar = $first;
+            }
+        }
+
+        if (! is_string($id) || $id === '') {
+            throw new RuntimeException('Spotify profile missing user id.');
+        }
+
+        if (! is_string($email) || $email === '') {
+            throw new RuntimeException('Spotify profile missing email. Prüfe den Scope user-read-email.');
+        }
+
+        return [
+            'id' => $id,
+            'email' => $email,
+            'name' => is_string($name) && $name !== '' ? $name : 'Spotify User',
+            'avatar' => $avatar,
+        ];
     }
 
     private function clientId(): string

@@ -4,6 +4,8 @@ import api from '@/lib/api';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { AppTooltip } from '@/components/ui/tooltip';
+import { useI18n } from '@/context/locale-context';
 import { providerLabel } from '@/lib/music';
 import type { MusicProviderId } from '@/music/types';
 import type { ProviderTrack } from '@/types';
@@ -24,6 +26,7 @@ export function ProviderTrackPicker({
 }: Props) {
     const availableKey = (providers && providers.length > 0 ? providers : [providerProp]).join(',');
     const available = (availableKey ? availableKey.split(',') : []) as MusicProviderId[];
+    const { t } = useI18n();
     const [provider, setProvider] = useState<MusicProviderId>(() => {
         if (value?.provider && available.includes(value.provider)) {
             return value.provider;
@@ -34,7 +37,7 @@ export function ProviderTrackPicker({
     const [results, setResults] = useState<ProviderTrack[]>([]);
     const [searching, setSearching] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const label = provider ? providerLabel(provider) : 'Musik';
+    const label = provider ? providerLabel(provider) : t('common.music');
 
     useEffect(() => {
         if (available.length === 0) {
@@ -65,7 +68,7 @@ export function ProviderTrackPicker({
                 setResults(data.tracks);
             } catch {
                 if (!controller.signal.aborted) {
-                    setError('Suche fehlgeschlagen.');
+                    setError(t('search.searchFailed'));
                     setResults([]);
                 }
             } finally {
@@ -84,7 +87,7 @@ export function ProviderTrackPicker({
     if (available.length === 0) {
         return (
             <p className="rounded-xl border border-dashed border-line bg-surface/60 px-3 py-3 text-xs text-muted">
-                Kein aktiver Musikdienst für die Suche.
+                {t('search.noActiveService')}
             </p>
         );
     }
@@ -96,16 +99,18 @@ export function ProviderTrackPicker({
                 {value.album_art_url ? (
                     <img src={value.album_art_url} alt="" className="h-10 w-10 rounded object-cover" />
                 ) : (
-                    <div className="flex h-10 w-10 items-center justify-center rounded bg-paper-2 text-xs text-muted">—</div>
+                    <div className="flex h-10 w-10 items-center justify-center rounded bg-paper-2 text-xs text-muted">{t('common.dash')}</div>
                 )}
                 <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{value.name}</p>
                     <p className="truncate text-xs text-muted">{value.artist}</p>
                 </div>
                 <Badge className="border-accent/20 bg-accent/10 text-accent">{valueLabel}</Badge>
-                <Button type="button" variant="ghost" size="icon" onClick={() => onChange(null)} aria-label="Track entfernen">
-                    <X className="h-4 w-4" />
-                </Button>
+                <AppTooltip label={t('search.removeTrack')}>
+                    <Button type="button" variant="ghost" size="icon" onClick={() => onChange(null)} aria-label={t('search.removeTrack')}>
+                        <X className="h-4 w-4" />
+                    </Button>
+                </AppTooltip>
             </div>
         );
     }
@@ -137,7 +142,7 @@ export function ProviderTrackPicker({
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
                 <Input
                     className="pl-9"
-                    placeholder={`${label}-Track suchen…`}
+                    placeholder={t('search.searchProvider', { label })}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                 />
@@ -148,9 +153,9 @@ export function ProviderTrackPicker({
             {query.trim() && (
                 <div className={cn('max-h-64 overflow-y-auto rounded-xl border border-line bg-surface')}>
                     {searching ? (
-                        <p className="px-3 py-3 text-sm text-muted">Suche…</p>
+                        <p className="px-3 py-3 text-sm text-muted">{t('common.searching')}</p>
                     ) : results.length === 0 ? (
-                        <p className="px-3 py-3 text-sm text-muted">Keine Treffer.</p>
+                        <p className="px-3 py-3 text-sm text-muted">{t('search.noResults')}</p>
                     ) : (
                         <ul className="divide-y divide-line">
                             {results.map((track) => (
@@ -164,7 +169,7 @@ export function ProviderTrackPicker({
                                             <img src={track.album_art_url} alt="" className="h-10 w-10 rounded object-cover" />
                                         ) : (
                                             <div className="flex h-10 w-10 items-center justify-center rounded bg-paper-2 text-xs text-muted">
-                                                —
+                                                {t('common.dash')}
                                             </div>
                                         )}
                                         <div className="min-w-0 flex-1">

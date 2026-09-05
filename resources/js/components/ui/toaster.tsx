@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { t } from '@/i18n';
 import { dismissToast, subscribeToasts, type ToastItem } from '@/lib/toast';
 
 export function Toaster() {
@@ -36,7 +37,7 @@ export function Toaster() {
                     <button
                         type="button"
                         className="rounded-md p-1 opacity-70 transition hover:opacity-100"
-                        aria-label="Schließen"
+                        aria-label={t('common.close')}
                         onClick={() => dismissToast(item.id)}
                     >
                         <X className="h-4 w-4" />

@@ -27,7 +27,8 @@ class SongPlayTrackingService
         $songUpdate = [
             'last_played_at' => now(),
         ];
-        if ($durationMs && (! $song->duration_ms || $song->duration_ms !== $durationMs)) {
+        // Never overwrite a known catalog duration — play progress can race across track switches.
+        if ($durationMs && (! $song->duration_ms || $song->duration_ms <= 0)) {
             $songUpdate['duration_ms'] = $durationMs;
         }
 
@@ -43,7 +44,7 @@ class SongPlayTrackingService
         bool $completed = false,
         ?int $durationMs = null,
     ): SongPlay {
-        abort_unless($play->user_id === $user->id, 403, 'Nicht berechtigt.');
+        abort_unless($play->user_id === $user->id, 403, __('Not authorized.'));
 
         $listenedMs = max(0, $listenedMs);
         $previous = (int) $play->listened_ms;
@@ -75,9 +76,9 @@ class SongPlayTrackingService
         if ($normalizedDuration) {
             Song::query()
                 ->whereKey($play->song_id)
-                ->where(function ($query) use ($normalizedDuration) {
+                ->where(function ($query) {
                     $query->whereNull('duration_ms')
-                        ->orWhere('duration_ms', '!=', $normalizedDuration);
+                        ->orWhere('duration_ms', '<=', 0);
                 })
                 ->update(['duration_ms' => $normalizedDuration]);
         }

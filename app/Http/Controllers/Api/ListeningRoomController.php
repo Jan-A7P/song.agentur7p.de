@@ -96,7 +96,7 @@ class ListeningRoomController extends Controller
             'track_title' => ['nullable', 'string', 'max:255'],
             'track_artist' => ['nullable', 'string', 'max:255'],
             'album_art_url' => ['nullable', 'string', 'max:2048'],
-            'current_song_id' => ['nullable', 'integer', 'exists:songs,id'],
+            'current_song_id' => ['nullable', 'uuid', 'exists:songs,id'],
             'ended' => ['nullable', 'boolean'],
         ]);
 
@@ -145,7 +145,7 @@ class ListeningRoomController extends Controller
     {
         $room = ListeningRoom::query()->where('code', strtoupper($code))->firstOrFail();
         $validated = $request->validate([
-            'song_id' => ['nullable', 'integer', 'exists:songs,id'],
+            'song_id' => ['nullable', 'uuid', 'exists:songs,id'],
             'provider' => ['nullable', 'string', 'max:32'],
             'track_uri' => ['nullable', 'string', 'max:255'],
             'title' => ['nullable', 'string', 'max:255'],
@@ -275,7 +275,7 @@ class ListeningRoomController extends Controller
             'host' => $room->host ? ['id' => $room->host->id, 'name' => $room->host->name] : null,
             'my_role' => $member?->role,
             'can_control' => ($member?->canControlPlayback() ?? false)
-                || (int) $room->host_user_id === (int) $user->id,
+                || (string) $room->host_user_id === (string) $user->id,
             'state' => [
                 'provider' => $room->provider,
                 'track_uri' => $room->track_uri,

@@ -14,6 +14,24 @@
                         (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
                     if (dark) document.documentElement.classList.add('dark');
                 } catch (_) {}
+                try {
+                    const stored = localStorage.getItem('songtexte.locale');
+                    const supported = ['de', 'en'];
+                    let locale = stored && supported.includes(stored) ? stored : null;
+                    if (!locale) {
+                        const langs = [...(navigator.languages || []), navigator.language].filter(Boolean);
+                        for (const item of langs) {
+                            const base = String(item).toLowerCase().split('-')[0];
+                            if (supported.includes(base)) {
+                                locale = base;
+                                break;
+                            }
+                        }
+                    }
+                    document.documentElement.lang = locale || 'en';
+                } catch (_) {
+                    document.documentElement.lang = 'en';
+                }
             })();
         </script>
         @vite(['resources/css/app.css', 'resources/js/main.tsx'])

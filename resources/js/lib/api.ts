@@ -1,4 +1,5 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
+import { getLocale } from '@/i18n';
 import { toast } from '@/lib/toast';
 
 declare module 'axios' {
@@ -51,6 +52,7 @@ api.interceptors.request.use((config) => {
     if (token) {
         config.headers['X-XSRF-TOKEN'] = token;
     }
+    config.headers['Accept-Language'] = getLocale();
     return config;
 });
 

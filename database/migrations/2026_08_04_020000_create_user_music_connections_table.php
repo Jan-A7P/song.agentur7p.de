@@ -12,7 +12,7 @@ return new class extends Migration
     {
         Schema::create('user_music_connections', function (Blueprint $table) {
             $table->uuid('id')->primary();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->foreignUuid('user_id')->constrained()->cascadeOnDelete();
             $table->string('provider', 32);
             $table->text('access_token')->nullable();
             $table->text('refresh_token')->nullable();

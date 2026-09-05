@@ -15,6 +15,7 @@ export type ParsedLrc = {
         title?: string;
         album?: string;
         offsetMs: number;
+        lengthMs?: number;
     };
     lines: LrcLine[];
     plainText: string;
@@ -24,6 +25,26 @@ const META_RE = /^\[(ar|ti|al|offset|by|length):\s*(.*?)\s*\]$/i;
 const TIMED_LINE_RE = /^((?:\[\d{1,2}:\d{2}(?:\.\d{1,3})?\])+)\s*(.*)$/;
 const TIME_TAG_RE = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
 
+export function durationFromLyrics(lyrics: string | null | undefined): number | null {
+    if (!lyrics) {
+        return null;
+    }
+    const parsed = parseLrc(lyrics);
+    const lengthTag = parsed.meta.lengthMs;
+    if (lengthTag && lengthTag > 1000) {
+        return lengthTag;
+    }
+    if (!parsed.isLrc || parsed.lines.length === 0) {
+        return null;
+    }
+    const last = parsed.lines[parsed.lines.length - 1]?.timeMs ?? 0;
+    if (last < 30_000) {
+        return null;
+    }
+    // LRC usually ends before the audio outro.
+    return last + 8_000;
+}
+
 function parseTimeTag(minutes: string, seconds: string, fraction?: string): number {
     let ms = 0;
     if (fraction) {
@@ -32,6 +53,20 @@ function parseTimeTag(minutes: string, seconds: string, fraction?: string): numb
     }
 
     return (Number(minutes) * 60 + Number(seconds)) * 1000 + ms;
+}
+
+function parseLengthTag(value: string): number | null {
+    const trimmed = value.trim();
+    const asNumber = Number(trimmed);
+    if (Number.isFinite(asNumber) && asNumber > 0) {
+        // Seconds if small, already ms if large.
+        return asNumber < 10_000 ? Math.round(asNumber * 1000) : Math.round(asNumber);
+    }
+    const match = trimmed.match(/^(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?$/);
+    if (!match) {
+        return null;
+    }
+    return parseTimeTag(match[1], match[2], match[3]);
 }
 
 export function formatLrcTimestamp(ms: number): string {
@@ -68,6 +103,12 @@ export function parseLrc(input: string): ParsedLrc {
             if (key === 'offset') {
                 const offset = Number(value);
                 meta.offsetMs = Number.isFinite(offset) ? offset : 0;
+            }
+            if (key === 'length') {
+                const lengthMs = parseLengthTag(value);
+                if (lengthMs) {
+                    meta.lengthMs = lengthMs;
+                }
             }
             continue;
         }

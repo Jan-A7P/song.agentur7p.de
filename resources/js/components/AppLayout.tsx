@@ -1,12 +1,27 @@
 import { useEffect, useState } from 'react';
-import { Link, NavLink, Outlet } from 'react-router-dom';
-import { ListMusic, LogOut, Music2, Plus, Radio, Search, Settings, UserRound } from 'lucide-react';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Compass, ListMusic, Languages, LogOut, Music2, Plus, Radio, Settings, UserRound, Check } from 'lucide-react';
 import { useAuth } from '@/context/auth-context';
+import { useI18n } from '@/context/locale-context';
 import { usePlayer } from '@/context/player-context';
 import { Button } from '@/components/ui/button';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuSub,
+    DropdownMenuSubContent,
+    DropdownMenuSubTrigger,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { PartyToggle } from '@/components/PartyToggle';
+import { PartyLights } from '@/components/PartyLights';
 import { PersistentPlayerBar } from '@/components/PersistentPlayerBar';
 import { GlobalSearch } from '@/components/GlobalSearch';
+import { HeaderSearch } from '@/components/HeaderSearch';
+import { UserAvatar } from '@/components/UserAvatar';
 import { hasMusicConnected } from '@/lib/music';
 import { cn } from '@/lib/utils';
 
@@ -18,181 +33,189 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 
 export function AppLayout() {
     const { user, loading, logout } = useAuth();
+    const { t, locale, setLocale } = useI18n();
     const { track } = usePlayer();
-    const playerVisible = Boolean(hasMusicConnected(user) && track);
-    const [searchOpen, setSearchOpen] = useState(false);
-    const [menuOpen, setMenuOpen] = useState(false);
+    const { pathname } = useLocation();
+    const isAuthPage = pathname === '/login' || pathname === '/register';
+    const isDiscoverPage = pathname === '/discover';
+    const playerVisible = Boolean(hasMusicConnected(user) && track) && !isAuthPage;
+    const [commandOpen, setCommandOpen] = useState(false);
 
     useEffect(() => {
+        if (isAuthPage) {
+            return;
+        }
         const onKey = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
                 e.preventDefault();
-                setSearchOpen(true);
+                setCommandOpen(true);
             }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, []);
-
-    useEffect(() => {
-        if (!menuOpen) {
-            return;
-        }
-        const onClick = () => setMenuOpen(false);
-        window.addEventListener('click', onClick);
-        return () => window.removeEventListener('click', onClick);
-    }, [menuOpen]);
+    }, [isAuthPage]);
 
     return (
-        <div
-            className={cn(
-                'flex min-h-screen w-full flex-col',
-                playerVisible ? 'pb-[calc(var(--player-bar-height,10rem)+1.5rem)]' : 'pb-12',
-            )}
-        >
-            <header className="sticky top-0 z-40 w-full border-b border-line/70 bg-paper/80 backdrop-blur-xl">
-                <div className="grid h-16 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-4 sm:gap-4 sm:px-6 xl:grid-cols-[minmax(0,1fr)_minmax(14rem,28rem)_minmax(0,1fr)]">
+        <>
+            <PartyLights />
+            <div
+                className={cn(
+                    'relative z-10 flex w-full flex-col',
+                    isDiscoverPage ? 'h-dvh overflow-hidden' : 'min-h-screen',
+                    playerVisible ? 'pb-[calc(var(--player-bar-height,10rem)+1.5rem)]' : isAuthPage ? 'pb-0' : 'pb-12',
+                )}
+            >
+            <header
+                className={cn(
+                    'sticky top-0 z-40 w-full border-b border-line/70 bg-paper/80 backdrop-blur-xl',
+                    isAuthPage && 'lg:border-line/40',
+                )}
+            >
+                <div
+                    className={cn(
+                        'grid h-16 w-full items-center gap-2 px-4 sm:gap-4 sm:px-6',
+                        isAuthPage
+                            ? 'grid-cols-[1fr_auto]'
+                            : 'grid-cols-[auto_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,1fr)_minmax(14rem,28rem)_minmax(0,1fr)]',
+                    )}
+                >
                     <div className="flex min-w-0 items-center gap-3 sm:gap-5">
                         <Link to="/" className="group flex shrink-0 items-center gap-2.5">
                             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-ink text-paper transition group-hover:bg-accent group-hover:text-white">
                                 <Music2 className="h-4 w-4" />
                             </span>
                             <span className="hidden font-display text-xl font-semibold tracking-tight sm:inline">
-                                Songtexte
+                                {t('brand')}
                             </span>
                         </Link>
 
-                        <nav className="hidden items-center gap-1 xl:flex">
-                            <NavLink to="/" end className={navLinkClass}>
-                                Songs
-                            </NavLink>
-                            <NavLink to="/playlists" className={navLinkClass}>
-                                Playlists
-                            </NavLink>
-                            {user && (
-                                <NavLink to="/rooms" className={navLinkClass}>
-                                    Hörräume
+                        {!isAuthPage && (
+                            <nav className="hidden items-center gap-1 xl:flex">
+                                <NavLink to="/" end className={navLinkClass}>
+                                    {t('nav.songs')}
                                 </NavLink>
-                            )}
-                        </nav>
+                                <NavLink to="/playlists" className={navLinkClass}>
+                                    {t('nav.playlists')}
+                                </NavLink>
+                                {user && (
+                                    <NavLink to="/discover" className={navLinkClass}>
+                                        {t('nav.discover')}
+                                    </NavLink>
+                                )}
+                                {user && (
+                                    <NavLink to="/rooms" className={navLinkClass}>
+                                        {t('nav.rooms')}
+                                    </NavLink>
+                                )}
+                            </nav>
+                        )}
                     </div>
 
-                    <div className="min-w-0 w-full xl:justify-self-center">
-                        <button
-                            type="button"
-                            onClick={() => setSearchOpen(true)}
-                            className="flex h-9 w-full max-w-md items-center gap-2 rounded-full border border-line bg-surface px-3 text-sm text-muted transition hover:border-ink/20 hover:text-ink sm:px-4 xl:mx-auto"
-                            aria-label="Suche öffnen"
-                        >
-                            <Search className="h-3.5 w-3.5 shrink-0" />
-                            <span className="truncate">Suchen…</span>
-                            <kbd className="ml-auto hidden shrink-0 rounded border border-line bg-paper-2 px-1.5 py-0.5 text-[10px] font-medium text-muted sm:inline">
-                                Ctrl+K
-                            </kbd>
-                        </button>
-                    </div>
+                    {!isAuthPage && <HeaderSearch onOpenCommand={() => setCommandOpen(true)} />}
 
                     <div className="flex items-center justify-end gap-1.5 sm:gap-2">
+                        <PartyToggle />
                         <ThemeToggle />
 
                         {!loading && user && (
-                            <div className="relative" onClick={(e) => e.stopPropagation()}>
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className="gap-2 rounded-full"
-                                    onClick={() => setMenuOpen((v) => !v)}
-                                    aria-expanded={menuOpen}
-                                    aria-haspopup="menu"
-                                >
-                                    <UserRound className="h-4 w-4" />
-                                    <span className="hidden max-w-[8rem] truncate sm:inline">{user.name}</span>
-                                </Button>
-
-                                {menuOpen && (
-                                    <div
-                                        role="menu"
-                                        className="absolute right-0 top-full z-50 mt-2 w-52 overflow-hidden rounded-xl border border-line bg-paper py-1 shadow-lg"
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        className="gap-2 rounded-full"
                                     >
-                                        <Link
-                                            to="/songs/create"
-                                            role="menuitem"
-                                            className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-paper-2 xl:hidden"
-                                            onClick={() => setMenuOpen(false)}
-                                        >
-                                            <Plus className="h-4 w-4 text-muted" />
-                                            Song hinzufügen
+                                        <UserAvatar user={user} size="sm" className="h-7 w-7" />
+                                        <span className="hidden max-w-[8rem] truncate sm:inline">{user.name}</span>
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-52">
+                                    <DropdownMenuItem asChild>
+                                        <Link to="/profile">
+                                            <UserRound className="h-4 w-4 text-muted" />
+                                            {t('nav.profile')}
                                         </Link>
-                                        <Link
-                                            to="/"
-                                            role="menuitem"
-                                            className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-paper-2 xl:hidden"
-                                            onClick={() => setMenuOpen(false)}
-                                        >
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild className="xl:hidden">
+                                        <Link to="/songs/create">
+                                            <Plus className="h-4 w-4 text-muted" />
+                                            {t('nav.addSong')}
+                                        </Link>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild className="xl:hidden">
+                                        <Link to="/">
                                             <Music2 className="h-4 w-4 text-muted" />
-                                            Songs
+                                            {t('nav.songs')}
                                         </Link>
-                                        <Link
-                                            to="/rooms"
-                                            role="menuitem"
-                                            className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-paper-2 xl:hidden"
-                                            onClick={() => setMenuOpen(false)}
-                                        >
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild className="xl:hidden">
+                                        <Link to="/discover">
+                                            <Compass className="h-4 w-4 text-muted" />
+                                            {t('nav.discover')}
+                                        </Link>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild className="xl:hidden">
+                                        <Link to="/rooms">
                                             <Radio className="h-4 w-4 text-muted" />
-                                            Hörräume
+                                            {t('nav.rooms')}
                                         </Link>
-                                        <Link
-                                            to="/playlists"
-                                            role="menuitem"
-                                            className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-paper-2 xl:hidden"
-                                            onClick={() => setMenuOpen(false)}
-                                        >
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild className="xl:hidden">
+                                        <Link to="/playlists">
                                             <ListMusic className="h-4 w-4 text-muted" />
-                                            Playlists
+                                            {t('nav.playlists')}
                                         </Link>
-                                        <Link
-                                            to="/songs/create"
-                                            role="menuitem"
-                                            className="hidden items-center gap-2 px-3 py-2 text-sm hover:bg-paper-2 xl:flex"
-                                            onClick={() => setMenuOpen(false)}
-                                        >
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild className="hidden xl:flex">
+                                        <Link to="/songs/create">
                                             <Plus className="h-4 w-4 text-muted" />
-                                            Song hinzufügen
+                                            {t('nav.addSong')}
                                         </Link>
-                                        <Link
-                                            to="/settings"
-                                            role="menuitem"
-                                            className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-paper-2"
-                                            onClick={() => setMenuOpen(false)}
-                                        >
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild>
+                                        <Link to="/settings">
                                             <Settings className="h-4 w-4 text-muted" />
-                                            Einstellungen
+                                            {t('nav.settings')}
                                         </Link>
-                                        <button
-                                            type="button"
-                                            role="menuitem"
-                                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-paper-2"
-                                            onClick={() => {
-                                                setMenuOpen(false);
-                                                void logout();
-                                            }}
-                                        >
-                                            <LogOut className="h-4 w-4 text-muted" />
-                                            Logout
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger>
+                                            <Languages className="h-4 w-4 text-muted" />
+                                            {t('language.label')}
+                                        </DropdownMenuSubTrigger>
+                                        <DropdownMenuSubContent>
+                                            <DropdownMenuItem onSelect={() => setLocale('de')}>
+                                                {t('language.de')}
+                                                {locale === 'de' ? <Check className="ml-auto h-4 w-4" /> : null}
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onSelect={() => setLocale('en')}>
+                                                {t('language.en')}
+                                                {locale === 'en' ? <Check className="ml-auto h-4 w-4" /> : null}
+                                            </DropdownMenuItem>
+                                        </DropdownMenuSubContent>
+                                    </DropdownMenuSub>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                        onSelect={() => {
+                                            void logout();
+                                        }}
+                                    >
+                                        <LogOut className="h-4 w-4 text-muted" />
+                                        {t('common.logout')}
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
                         )}
 
-                        {!loading && !user && (
+                        {!loading && !user && !isAuthPage && (
                             <>
                                 <Button asChild variant="ghost" size="sm" className="rounded-full">
-                                    <Link to="/login">Login</Link>
+                                    <Link to="/login">{t('common.login')}</Link>
                                 </Button>
                                 <Button asChild size="sm" className="rounded-full">
-                                    <Link to="/register">Registrieren</Link>
+                                    <Link to="/register">{t('common.register')}</Link>
                                 </Button>
                             </>
                         )}
@@ -200,12 +223,21 @@ export function AppLayout() {
                 </div>
             </header>
 
-            <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-8 sm:px-6">
+            <main
+                className={cn(
+                    'w-full flex-1',
+                    isAuthPage
+                        ? 'max-w-none px-0 pt-0'
+                        : isDiscoverPage
+                          ? 'flex min-h-0 w-full max-w-none flex-col overflow-x-visible pt-3 pb-1'
+                          : 'mx-auto max-w-5xl px-4 pt-8 sm:px-6',
+                )}
+            >
                 <Outlet />
             </main>
-
-            <PersistentPlayerBar />
-            <GlobalSearch open={searchOpen} onOpenChange={setSearchOpen} />
-        </div>
+            </div>
+            {!isAuthPage && <PersistentPlayerBar />}
+            {!isAuthPage && <GlobalSearch open={commandOpen} onOpenChange={setCommandOpen} />}
+        </>
     );
 }

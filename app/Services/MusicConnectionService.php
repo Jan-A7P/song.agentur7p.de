@@ -121,7 +121,7 @@ class MusicConnectionService
 
             $connection = $user->musicConnections()->where('provider', $provider->value)->first();
             if (! $connection) {
-                throw new RuntimeException('Verbindung nicht gefunden.');
+                throw new RuntimeException(__('Connection not found.'));
             }
 
             $connection->update([
@@ -156,7 +156,7 @@ class MusicConnectionService
             }
 
             if (! $connection || ! $connection->isLinked()) {
-                throw new RuntimeException('Verbindung nicht gefunden.');
+                throw new RuntimeException(__('Connection not found.'));
             }
 
             $connection->forceFill(['enabled' => $enabled])->save();

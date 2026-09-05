@@ -7,9 +7,12 @@ import { useAuth } from '@/context/auth-context';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { PlaylistListSkeleton } from '@/components/skeletons';
+import { useI18n } from '@/context/locale-context';
 
 export function PlaylistsIndexPage() {
     const { user } = useAuth();
+    const { t } = useI18n();
     const [playlists, setPlaylists] = useState<Playlist[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -25,7 +28,7 @@ export function PlaylistsIndexPage() {
                 });
                 setPlaylists(data.data);
             } catch {
-                setError('Playlists konnten nicht geladen werden.');
+                setError(t('playlists.loadFailed'));
             } finally {
                 setLoading(false);
             }
@@ -36,21 +39,21 @@ export function PlaylistsIndexPage() {
         <div className="space-y-8">
             <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-2">
-                    <h1 className="font-display text-4xl font-semibold tracking-tight">Playlists</h1>
-                    <p className="max-w-xl text-muted">Sammlungen von Songs – sortierbar per Drag & Drop.</p>
+                    <h1 className="font-display text-4xl font-semibold tracking-tight">{t('playlists.title')}</h1>
+                    <p className="max-w-xl text-muted">{t('playlists.subtitle')}</p>
                 </div>
                 {user && (
                     <div className="flex flex-wrap gap-2">
                         <Button asChild variant="outline">
                             <Link to="/playlists/import">
                                 <Download className="h-4 w-4" />
-                                Spotify importieren
+                                {t('playlists.importSpotify')}
                             </Link>
                         </Button>
                         <Button asChild variant="accent">
                             <Link to="/playlists/create">
                                 <Plus className="h-4 w-4" />
-                                Neue Playlist
+                                {t('playlists.newPlaylist')}
                             </Link>
                         </Button>
                     </div>
@@ -60,10 +63,10 @@ export function PlaylistsIndexPage() {
             {user && (
                 <div className="flex gap-2">
                     <Button type="button" size="sm" variant={mineOnly ? 'outline' : 'default'} onClick={() => setMineOnly(false)}>
-                        Alle
+                        {t('common.all')}
                     </Button>
                     <Button type="button" size="sm" variant={mineOnly ? 'default' : 'outline'} onClick={() => setMineOnly(true)}>
-                        Meine
+                        {t('common.mine')}
                     </Button>
                 </div>
             )}
@@ -71,14 +74,14 @@ export function PlaylistsIndexPage() {
             {error && <Alert variant="error">{error}</Alert>}
 
             {loading ? (
-                <p className="text-muted">Laden…</p>
+                <PlaylistListSkeleton />
             ) : playlists.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-line px-6 py-12 text-center">
                     <ListMusic className="mx-auto mb-3 h-8 w-8 text-muted" />
-                    <p className="text-muted">Noch keine Playlists vorhanden.</p>
+                    <p className="text-muted">{t('playlists.empty')}</p>
                     {user && (
                         <Button asChild variant="accent" className="mt-4">
-                            <Link to="/playlists/create">Erste Playlist erstellen</Link>
+                            <Link to="/playlists/create">{t('playlists.createFirst')}</Link>
                         </Button>
                     )}
                 </div>
@@ -96,11 +99,11 @@ export function PlaylistsIndexPage() {
                                 <div className="min-w-0 flex-1">
                                     <p className="truncate font-medium">{playlist.name}</p>
                                     <p className="truncate text-sm text-muted">
-                                        {playlist.songs_count ?? 0} Songs
-                                        {playlist.user ? ` · ${playlist.user.name}` : ''}
+                                        {t('common.songCount', { count: playlist.songs_count ?? 0 })}
+                                        {playlist.user ? t('playlists.ownerSuffix', { name: playlist.user.name }) : ''}
                                     </p>
                                 </div>
-                                {user?.id === playlist.user_id && <Badge>Meine</Badge>}
+                                {user?.id === playlist.user_id && <Badge>{t('common.mine')}</Badge>}
                             </Link>
                         </li>
                     ))}

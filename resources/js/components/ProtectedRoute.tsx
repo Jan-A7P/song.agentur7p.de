@@ -1,11 +1,12 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '@/context/auth-context';
+import { PageLoadingSkeleton } from '@/components/skeletons';
 
 export function ProtectedRoute() {
     const { user, loading } = useAuth();
 
     if (loading) {
-        return <p className="text-muted">Laden…</p>;
+        return <PageLoadingSkeleton />;
     }
 
     if (!user) {

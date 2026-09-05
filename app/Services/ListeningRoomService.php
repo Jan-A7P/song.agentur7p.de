@@ -50,7 +50,7 @@ class ListeningRoomService
         $room = ListeningRoom::query()->where('code', strtoupper($code))->firstOrFail();
 
         if (! $room->isOpen()) {
-            throw new RuntimeException('Dieser Hörraum ist geschlossen.');
+            throw new RuntimeException(__('This listening room is closed.'));
         }
 
         $existing = $room->members()->where('user_id', $user->id)->first();
@@ -58,12 +58,12 @@ class ListeningRoomService
         if ($existing) {
             $existing->update([
                 'last_seen_at' => now(),
-                'role' => (int) $room->host_user_id === (int) $user->id ? 'host' : $existing->role,
+                'role' => (string) $room->host_user_id === (string) $user->id ? 'host' : $existing->role,
             ]);
         } else {
             $room->members()->create([
                 'user_id' => $user->id,
-                'role' => (int) $room->host_user_id === (int) $user->id ? 'host' : 'member',
+                'role' => (string) $room->host_user_id === (string) $user->id ? 'host' : 'member',
                 'last_seen_at' => now(),
             ]);
         }
@@ -297,7 +297,7 @@ class ListeningRoomService
         if ($songId) {
             $song = Song::query()->findOrFail($songId);
             if (! $song->isPlayable()) {
-                throw new RuntimeException('Song hat keine abspielbare Provider-URI.');
+                throw new RuntimeException(__('Song has no playable provider URI.'));
             }
             $payload = [
                 'song_id' => $song->id,
@@ -310,12 +310,12 @@ class ListeningRoomService
         }
 
         if (empty($payload['track_uri'])) {
-            throw new RuntimeException('Track-URI fehlt.');
+            throw new RuntimeException(__('Track URI missing.'));
         }
 
         $provider = $payload['provider'] ?? $room->provider ?? 'spotify';
         if (filled($room->provider) && $room->provider !== $provider && filled($room->track_uri)) {
-            throw new RuntimeException('Hörraum nutzt bereits einen anderen Musik-Anbieter.');
+            throw new RuntimeException(__('Room already uses another music provider.'));
         }
 
         $position = (int) $room->queueItems()->where('status', 'queued')->max('position') + 1;
@@ -346,10 +346,10 @@ class ListeningRoomService
     {
         $member = $this->memberOrFail($room, $user);
         if (! $member->canControlPlayback() && $item->added_by !== $user->id) {
-            throw new RuntimeException('Nicht berechtigt.');
+            throw new RuntimeException(__('Not authorized.'));
         }
         if ($item->listening_room_id !== $room->id) {
-            throw new RuntimeException('Song gehört nicht zu diesem Raum.');
+            throw new RuntimeException(__('Song does not belong to this room.'));
         }
 
         $item->delete();
@@ -360,7 +360,7 @@ class ListeningRoomService
     {
         $this->memberOrFail($room, $user);
         if ($item->listening_room_id !== $room->id || $item->status !== 'queued') {
-            throw new RuntimeException('Abstimmung nicht möglich.');
+            throw new RuntimeException(__('Voting is not possible.'));
         }
 
         $existing = ListeningRoomVote::query()
@@ -421,10 +421,10 @@ class ListeningRoomService
         $this->assertHost($room, $actor);
 
         if (! in_array($role, ['moderator', 'member'], true)) {
-            throw new RuntimeException('Ungültige Rolle.');
+            throw new RuntimeException(__('Invalid role.'));
         }
         if ($target->id === $room->host_user_id) {
-            throw new RuntimeException('Host-Rolle kann nicht geändert werden.');
+            throw new RuntimeException(__('Host role cannot be changed.'));
         }
 
         $member = $room->members()->where('user_id', $target->id)->firstOrFail();
@@ -437,7 +437,7 @@ class ListeningRoomService
     {
         $member = $room->members()->where('user_id', $user->id)->first();
         if (! $member) {
-            throw new RuntimeException('Du bist kein Teilnehmer dieses Raums.');
+            throw new RuntimeException(__('You are not a member of this room.'));
         }
 
         return $member;
@@ -447,21 +447,21 @@ class ListeningRoomService
     {
         $member = $this->memberOrFail($room, $user);
 
-        if ((int) $room->host_user_id === (int) $user->id && $member->role !== 'host') {
+        if ((string) $room->host_user_id === (string) $user->id && $member->role !== 'host') {
             $member->update(['role' => 'host']);
             $member->refresh();
         }
 
         if (! $member->canControlPlayback()) {
-            throw new RuntimeException('Nur Host oder Moderator steuern die Wiedergabe.');
+            throw new RuntimeException(__('Only the host or a moderator control playback.'));
         }
     }
 
     public function assertHost(ListeningRoom $room, User $user): void
     {
         $member = $this->memberOrFail($room, $user);
-        if (! $member->isHost() && (int) $room->host_user_id !== (int) $user->id) {
-            throw new RuntimeException('Nur der Host darf das.');
+        if (! $member->isHost() && (string) $room->host_user_id !== (string) $user->id) {
+            throw new RuntimeException(__('Only the host may do that.'));
         }
     }
 

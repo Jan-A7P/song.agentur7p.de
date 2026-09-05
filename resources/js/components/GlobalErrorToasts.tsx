@@ -1,10 +1,13 @@
 import { useEffect } from 'react';
+import { useI18n } from '@/context/locale-context';
 import { toast } from '@/lib/toast';
 
 /**
  * Catches unhandled runtime / promise errors and surfaces them as toasts.
  */
 export function GlobalErrorToasts() {
+    const { t } = useI18n();
+
     useEffect(() => {
         const onRejection = (event: PromiseRejectionEvent) => {
             const reason = event.reason;
@@ -12,7 +15,7 @@ export function GlobalErrorToasts() {
             if (reason && typeof reason === 'object' && 'isAxiosError' in reason) {
                 return;
             }
-            toast.fromError(reason, 'Unbehandelter Fehler.');
+            toast.fromError(reason, t('errors.unhandled'));
         };
 
         const onError = (event: ErrorEvent) => {
@@ -34,7 +37,7 @@ export function GlobalErrorToasts() {
             window.removeEventListener('unhandledrejection', onRejection);
             window.removeEventListener('error', onError);
         };
-    }, []);
+    }, [t]);
 
     return null;
 }

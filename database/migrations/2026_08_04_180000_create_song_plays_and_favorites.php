@@ -15,9 +15,9 @@ return new class extends Migration
         });
 
         Schema::create('song_plays', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('song_id')->constrained()->cascadeOnDelete();
+            $table->uuid('id')->primary();
+            $table->foreignUuid('user_id')->constrained()->cascadeOnDelete();
+            $table->foreignUuid('song_id')->constrained()->cascadeOnDelete();
             $table->string('provider', 32)->nullable();
             $table->unsignedBigInteger('listened_ms')->default(0);
             $table->boolean('completed')->default(false);
@@ -28,9 +28,9 @@ return new class extends Migration
         });
 
         Schema::create('song_favorites', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('song_id')->constrained()->cascadeOnDelete();
+            $table->uuid('id')->primary();
+            $table->foreignUuid('user_id')->constrained()->cascadeOnDelete();
+            $table->foreignUuid('song_id')->constrained()->cascadeOnDelete();
             $table->timestamps();
 
             $table->unique(['user_id', 'song_id']);

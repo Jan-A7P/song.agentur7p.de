@@ -8,9 +8,11 @@ export type MusicConnectionStatus = {
 };
 
 export type User = {
-    id: number;
+    id: string;
     name: string;
     email: string;
+    avatar: string | null;
+    has_custom_avatar: boolean;
     music_connections: MusicConnectionStatus[];
     active_provider: MusicProviderId | null;
     /** @deprecated use music_connections / active_provider */
@@ -24,10 +26,18 @@ export type SongProviderLink = {
     album_art_url?: string | null;
 };
 
+export type Artist = {
+    id: string;
+    name: string;
+    slug: string;
+    songs_count?: number;
+};
+
 export type Song = {
-    id: number;
+    id: string;
     title: string;
     artist: string;
+    artists?: Artist[];
     lyrics: string;
     provider: MusicProviderId | null;
     preferred_provider?: MusicProviderId | null;
@@ -41,30 +51,30 @@ export type Song = {
     total_listen_ms?: number;
     last_played_at?: string | null;
     is_favorited?: boolean;
-    user_id: number;
+    user_id: string | null;
     created_at: string;
     updated_at: string;
     user?: {
-        id: number;
+        id: string;
         name: string;
-    };
+    } | null;
     pivot?: {
-        id?: number;
+        id?: string;
         position: number;
-        playlist_id?: number;
-        song_id?: number;
+        playlist_id?: string;
+        song_id?: string;
     };
 };
 
 export type SongPlay = {
-    id: number;
-    song_id: number;
+    id: string;
+    song_id: string;
     listened_ms: number;
     completed: boolean;
 };
 
 export type SongPlayHistoryItem = {
-    id: number;
+    id: string;
     provider: MusicProviderId | null;
     listened_ms: number;
     completed: boolean;
@@ -87,23 +97,21 @@ export type SongStats = {
     my: {
         play_count: number;
         total_listen_ms: number;
-        completed_count: number;
-        last_played_at: string | null;
     } | null;
     recent_plays: SongPlayHistoryItem[];
     daily: SongDailyStat[];
 };
 
 export type Playlist = {
-    id: number;
+    id: string;
     name: string;
     description: string | null;
-    user_id: number;
+    user_id: string;
     created_at: string;
     updated_at: string;
     songs_count?: number;
     user?: {
-        id: number;
+        id: string;
         name: string;
     };
     songs?: Song[];
@@ -132,6 +140,22 @@ export type Paginated<T> = {
     prev_page_url: string | null;
 };
 
+export type DiscoverySpotifyTrack = {
+    id: string;
+    uri: string;
+    name: string;
+    artist: string;
+    album_art_url: string | null;
+    duration_ms: number | null;
+};
+
+export type DiscoveryCard = {
+    id: string;
+    source: 'catalog' | 'spotify';
+    song: Song | null;
+    spotify: DiscoverySpotifyTrack | null;
+};
+
 export type RoomMemberRole = 'host' | 'moderator' | 'member';
 
 export type RoomPlaybackState = {
@@ -140,15 +164,15 @@ export type RoomPlaybackState = {
     track_title: string | null;
     track_artist: string | null;
     album_art_url: string | null;
-    current_song_id: number | null;
+    current_song_id: string | null;
     position_ms: number;
     is_playing: boolean;
     playback_updated_at: string | null;
 };
 
 export type RoomQueueItem = {
-    id: number;
-    song_id: number | null;
+    id: string;
+    song_id: string | null;
     provider: MusicProviderId | null;
     track_uri: string;
     title: string;
@@ -157,38 +181,38 @@ export type RoomQueueItem = {
     position: number;
     status: string;
     votes_count: number;
-    voted_user_ids: number[];
-    added_by: { id: number; name: string } | null;
+    voted_user_ids: string[];
+    added_by: { id: string; name: string } | null;
 };
 
 export type RoomMember = {
-    id: number;
+    id: string;
     role: RoomMemberRole;
-    user: { id: number; name: string } | null;
+    user: { id: string; name: string } | null;
 };
 
 export type RoomMessage = {
-    id: number;
+    id: string;
     body: string;
     created_at: string;
-    user: { id: number; name: string };
+    user: { id: string; name: string };
 };
 
 export type RoomReaction = {
-    id: number;
+    id: string;
     emoji: string;
     count: number;
     created_at: string;
-    user: { id: number; name: string };
+    user: { id: string; name: string };
     recent_users: string[];
 };
 
 export type ListeningRoom = {
-    id: number;
+    id: string;
     code: string;
     name: string;
     status: string;
-    host: { id: number; name: string } | null;
+    host: { id: string; name: string } | null;
     my_role: RoomMemberRole | null;
     can_control: boolean;
     state: RoomPlaybackState;

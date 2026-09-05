@@ -14,6 +14,10 @@ import type { Playlist } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { invalidateSongListCache } from '@/lib/song-list-cache';
+import { AppTooltip } from '@/components/ui/tooltip';
+import { ImportPlaylistListSkeleton } from '@/components/skeletons';
+import { useI18n } from '@/context/locale-context';
 
 type RemotePlaylist = {
     id: string;
@@ -32,6 +36,7 @@ const PROVIDER_LABEL: Record<MusicProviderId, string> = {
 
 export function PlaylistImportPage() {
     const { user, refreshUser } = useAuth();
+    const { t } = useI18n();
     const navigate = useNavigate();
     const availableProviders = useMemo(() => {
         const ids: MusicProviderId[] = ['spotify', 'tidal'];
@@ -71,8 +76,7 @@ export function PlaylistImportPage() {
             setPlaylists([]);
             setNeedsReconnect(Boolean(axiosErr.response?.data?.needs_reconnect) || !isProviderConnected(user, nextProvider));
             setError(
-                axiosErr.response?.data?.message ??
-                    'Playlists konnten nicht geladen werden. Bitte den Musikdienst erneut verbinden.',
+                axiosErr.response?.data?.message ?? t('playlists.loadReconnect'),
             );
         } finally {
             setLoading(false);
@@ -86,11 +90,11 @@ export function PlaylistImportPage() {
         if (spotify === 'connected' || tidal === 'connected') {
             const connectedProvider: MusicProviderId = tidal === 'connected' ? 'tidal' : 'spotify';
             setProvider(connectedProvider);
-            setFlash(`${PROVIDER_LABEL[connectedProvider]} verbunden. Playlists werden geladen…`);
+            setFlash(t('playlists.connectedLoading', { label: PROVIDER_LABEL[connectedProvider] }));
             void refreshUser();
             window.history.replaceState({}, '', '/playlists/import');
         } else if (spotify || tidal) {
-            setError('Verbindung fehlgeschlagen.');
+            setError(t('playlists.connectionFailed'));
             window.history.replaceState({}, '', '/playlists/import');
         }
 
@@ -107,19 +111,23 @@ export function PlaylistImportPage() {
         setImportingId(playlistId);
         setError(null);
         try {
-            const { data } = await api.post<{ data: Playlist; imported_tracks: number }>(
+            const { data } = await api.post<{ data: Playlist; imported_tracks: number; lyrics_found?: number }>(
                 `/music/${provider}/playlists/import`,
                 { playlist_id: playlistId },
             );
+            invalidateSongListCache();
             navigate(`/playlists/${data.data.id}`, {
-                state: { importedTracks: data.imported_tracks },
+                state: {
+                    importedTracks: data.imported_tracks,
+                    lyricsFound: data.lyrics_found ?? 0,
+                },
             });
         } catch (err: unknown) {
             const axiosErr = err as { response?: { data?: { message?: string; needs_reconnect?: boolean } } };
             if (axiosErr.response?.data?.needs_reconnect) {
                 setNeedsReconnect(true);
             }
-            setError(axiosErr.response?.data?.message ?? 'Import fehlgeschlagen.');
+            setError(axiosErr.response?.data?.message ?? t('playlists.importFailed'));
         } finally {
             setImportingId(null);
         }
@@ -131,26 +139,28 @@ export function PlaylistImportPage() {
                 <div>
                     <p className="text-sm text-muted">
                         <Link to="/playlists" className="hover:text-accent">
-                            ← Playlists
+                            {t('playlists.back')}
                         </Link>
                     </p>
                     <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-                        Playlist importieren
+                        {t('playlists.importTitle')}
                     </h1>
                     <p className="mt-2 max-w-2xl text-muted">
-                        Tracks werden als neue Songs ohne Songtext angelegt.
+                        {t('playlists.importSubtitle')}
                     </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     {connected && (
                         <Button type="button" variant="outline" onClick={() => void loadPlaylists()} disabled={loading}>
                             <RefreshCw className="h-4 w-4" />
-                            Aktualisieren
+                            {t('common.refresh')}
                         </Button>
                     )}
                     <Button asChild variant="accent">
                         <a href={providerConnectUrl(provider, '/playlists/import', { force: true })}>
-                            {label} {connected ? 'neu verbinden' : 'verbinden'}
+                            {connected
+                                ? t('playlists.reconnect', { label })
+                                : t('playlists.connectLabel', { label })}
                         </a>
                     </Button>
                 </div>
@@ -165,8 +175,9 @@ export function PlaylistImportPage() {
                         variant={provider === id ? 'accent' : 'outline'}
                         onClick={() => setProvider(id)}
                     >
-                        {PROVIDER_LABEL[id]}
-                        {!isProviderConnected(user, id) ? ' (nicht verbunden)' : ''}
+                        {isProviderConnected(user, id)
+                            ? PROVIDER_LABEL[id]
+                            : t('playlists.notConnected', { label: PROVIDER_LABEL[id] })}
                     </Button>
                 ))}
             </div>
@@ -176,19 +187,19 @@ export function PlaylistImportPage() {
 
             {needsReconnect && (
                 <Alert>
-                    Für den Import musst du {label} verbinden (ggf. einmal neu verbinden).
+                    {t('playlists.needConnect', { label })}
                 </Alert>
             )}
 
             {!hasMusicConnected(user) || !connected ? (
                 <div className="rounded-2xl border border-dashed border-line px-6 py-12 text-center">
                     <ListMusic className="mx-auto mb-3 h-8 w-8 text-muted" />
-                    <p className="text-muted">Zuerst {label} verbinden, um Playlists zu laden.</p>
+                    <p className="text-muted">{t('playlists.connectFirst', { label })}</p>
                 </div>
             ) : loading ? (
-                <p className="text-muted">Playlists werden geladen…</p>
+                <ImportPlaylistListSkeleton />
             ) : playlists.length === 0 ? (
-                <p className="text-muted">Keine Playlists gefunden.</p>
+                <p className="text-muted">{t('playlists.noneFound')}</p>
             ) : (
                 <ul className="divide-y divide-line border-y border-line">
                     {playlists.map((playlist) => {
@@ -207,23 +218,26 @@ export function PlaylistImportPage() {
                                 <div className="min-w-0 flex-1">
                                     <p className="truncate font-medium">{playlist.name}</p>
                                     <p className="truncate text-sm text-muted">
-                                        {playlist.tracks_total} Tracks
-                                        {playlist.owner ? ` · ${playlist.owner}` : ''}
-                                        {!canImport ? ' · nur Metadaten (fremd)' : ''}
+                                        {t('common.trackCount', { count: playlist.tracks_total })}
+                                        {playlist.owner ? t('playlists.ownerSuffix', { name: playlist.owner }) : ''}
+                                        {!canImport ? t('playlists.metadataOnly') : ''}
                                     </p>
                                 </div>
                                 <Badge className="hidden sm:inline-flex">{label}</Badge>
-                                <Button
-                                    type="button"
-                                    variant="accent"
-                                    size="sm"
-                                    disabled={busy || !canImport}
-                                    title={canImport ? 'Playlist importieren' : 'Import nicht möglich'}
-                                    onClick={() => void importPlaylist(playlist.id)}
+                                <AppTooltip
+                                    label={canImport ? t('playlists.importTitle') : t('playlists.importNotPossible')}
                                 >
-                                    <Download className="h-4 w-4" />
-                                    {busy ? 'Import…' : 'Importieren'}
-                                </Button>
+                                    <Button
+                                        type="button"
+                                        variant="accent"
+                                        size="sm"
+                                        disabled={busy || !canImport}
+                                        onClick={() => void importPlaylist(playlist.id)}
+                                    >
+                                        <Download className="h-4 w-4" />
+                                        {busy ? t('common.importing') : t('common.import')}
+                                    </Button>
+                                </AppTooltip>
                             </li>
                         );
                     })}

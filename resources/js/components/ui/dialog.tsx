@@ -1,6 +1,7 @@
 import * as React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
+import { t } from '@/i18n';
 import { cn } from '@/lib/utils';
 
 export const Dialog = DialogPrimitive.Root;
@@ -39,7 +40,7 @@ export const DialogContent = React.forwardRef<
             {children}
             <DialogPrimitive.Close
                 className="absolute right-3 top-3 rounded-lg p-1.5 text-muted transition hover:bg-paper-2 hover:text-ink"
-                aria-label="Schließen"
+                aria-label={t('common.close')}
             >
                 <X className="h-4 w-4" />
             </DialogPrimitive.Close>

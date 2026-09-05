@@ -162,7 +162,7 @@ class LyricsLookupService
     private function extractLyrics(array $record): ?array
     {
         if (! empty($record['instrumental'])) {
-            throw new RuntimeException('Track ist instrumental — kein Songtext verfügbar.');
+            throw new RuntimeException(__('Track is instrumental — no lyrics available.'));
         }
 
         $synced = trim((string) ($record['syncedLyrics'] ?? ''));

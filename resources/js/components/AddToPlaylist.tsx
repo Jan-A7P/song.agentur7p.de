@@ -15,15 +15,19 @@ import {
     DialogTitle,
     DialogTrigger,
 } from '@/components/ui/dialog';
+import { DialogListSkeleton } from '@/components/skeletons';
 import { cn } from '@/lib/utils';
+import { AppTooltip } from '@/components/ui/tooltip';
+import { useI18n } from '@/context/locale-context';
 
 type Props = {
-    songId: number;
+    songId: string;
     songTitle?: string;
     songArtist?: string;
 };
 
 export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
+    const { t } = useI18n();
     const [open, setOpen] = useState(false);
     const [playlists, setPlaylists] = useState<Playlist[]>([]);
     const [loading, setLoading] = useState(false);
@@ -53,7 +57,7 @@ export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
                 }
             } catch {
                 if (!cancelled) {
-                    setError('Playlists konnten nicht geladen werden.');
+                    setError(t('playlists.loadFailed'));
                 }
             } finally {
                 if (!cancelled) {
@@ -93,7 +97,7 @@ export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
                 ),
             );
         } catch {
-            setError(`„${playlist.name}“: Hinzufügen fehlgeschlagen (evtl. schon enthalten).`);
+            setError(t('addToPlaylist.addFailed', { name: playlist.name }));
         } finally {
             setAddingId(null);
         }
@@ -101,16 +105,22 @@ export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
 
     return (
         <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-                <Button type="button" variant="outline" size="sm">
-                    <ListPlus className="h-4 w-4" />
-                    Zur Playlist
-                </Button>
-            </DialogTrigger>
+            <AppTooltip label={t('addToPlaylist.title')}>
+                <DialogTrigger asChild>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        aria-label={t('addToPlaylist.title')}
+                    >
+                        <ListPlus className="h-4 w-4" />
+                    </Button>
+                </DialogTrigger>
+            </AppTooltip>
 
             <DialogContent aria-describedby={undefined}>
                 <DialogHeader>
-                    <DialogTitle>Zur Playlist hinzufügen</DialogTitle>
+                    <DialogTitle>{t('addToPlaylist.title')}</DialogTitle>
                     <DialogDescription>
                         {songTitle ? (
                             <>
@@ -118,7 +128,7 @@ export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
                                 {songArtist ? <span> · {songArtist}</span> : null}
                             </>
                         ) : (
-                            'Wähle eine deiner Playlists.'
+                            t('addToPlaylist.choose')
                         )}
                     </DialogDescription>
                 </DialogHeader>
@@ -128,7 +138,7 @@ export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
                         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
                         <Input
                             className="pl-9"
-                            placeholder="Playlist filtern…"
+                            placeholder={t('addToPlaylist.filter')}
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
                             autoFocus
@@ -136,17 +146,14 @@ export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
                     </div>
 
                     {loading ? (
-                        <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted">
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            Laden…
-                        </div>
+                        <DialogListSkeleton />
                     ) : filtered.length === 0 ? (
                         <div className="space-y-2 py-8 text-center">
                             <ListMusic className="mx-auto h-8 w-8 text-muted/70" />
                             <p className="text-sm text-muted">
                                 {playlists.length === 0
-                                    ? 'Noch keine Playlist vorhanden.'
-                                    : 'Keine Playlist passt zur Suche.'}
+                                    ? t('addToPlaylist.none')
+                                    : t('addToPlaylist.noMatch')}
                             </p>
                         </div>
                     ) : (
@@ -182,13 +189,13 @@ export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
                                                     {playlist.name}
                                                 </span>
                                                 <span className="block text-xs text-muted">
-                                                    {playlist.songs_count ?? 0} Songs
-                                                    {added ? ' · hinzugefügt' : ''}
+                                                    {t('common.songCount', { count: playlist.songs_count ?? 0 })}
+                                                    {added ? t('addToPlaylist.added') : ''}
                                                 </span>
                                             </span>
                                             {!added && !busy && (
                                                 <span className="text-xs font-medium text-accent">
-                                                    Hinzufügen
+                                                    {t('common.add')}
                                                 </span>
                                             )}
                                         </button>
@@ -207,10 +214,10 @@ export function AddToPlaylist({ songId, songTitle, songArtist }: Props) {
                         className="text-sm text-muted underline-offset-2 hover:text-accent hover:underline"
                         onClick={() => setOpen(false)}
                     >
-                        Neue Playlist erstellen
+                        {t('addToPlaylist.createNew')}
                     </Link>
                     <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
-                        Fertig
+                        {t('common.done')}
                     </Button>
                 </DialogFooter>
             </DialogContent>

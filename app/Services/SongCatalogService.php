@@ -11,6 +11,11 @@ use Illuminate\Validation\ValidationException;
 
 class SongCatalogService
 {
+    public function __construct(
+        private ArtistService $artists,
+        private SpotifyService $spotify,
+    ) {}
+
     /**
      * Find an existing catalog song by provider IDs or normalized title+artist.
      */
@@ -56,6 +61,7 @@ class SongCatalogService
      *   title: string,
      *   artist: string,
      *   lyrics?: string|null,
+     *   duration_ms?: int|null,
      *   provider?: string|null,
      *   preferred_provider?: string|null,
      *   provider_track_id?: string|null,
@@ -65,9 +71,11 @@ class SongCatalogService
      * }  $attributes
      * @return array{song: Song, created: bool}
      */
-    public function createOrMerge(User $user, array $attributes): array
+    public function createOrMerge(?User $user, array $attributes): array
     {
-        return DB::transaction(function () use ($user, $attributes) {
+        unset($user);
+
+        return DB::transaction(function () use ($attributes) {
             $attributes = $this->normalizeProviderAttributes($attributes);
             $links = $this->extractProviderLinks($attributes);
 
@@ -83,19 +91,24 @@ class SongCatalogService
 
             if ($existing) {
                 $this->mergeProviderData($existing, $attributes);
+                $this->artists->syncSongArtists($existing->fresh(), (string) ($attributes['artist'] ?? $existing->artist));
 
-                return ['song' => $existing->fresh()->load(['user:id,name', 'providers']), 'created' => false];
+                return ['song' => $existing->fresh()->load(['providers', 'artists']), 'created' => false];
             }
 
-            $song = $user->songs()->create([
+            $durationMs = $this->normalizeDurationMs($attributes['duration_ms'] ?? null);
+
+            $song = Song::query()->create([
                 'title' => $attributes['title'],
                 'artist' => $attributes['artist'],
                 'lyrics' => $attributes['lyrics'] ?? '',
+                'duration_ms' => $durationMs,
                 'provider' => null,
                 'preferred_provider' => $attributes['preferred_provider'] ?? null,
                 'provider_track_id' => null,
                 'provider_uri' => null,
                 'album_art_url' => $attributes['album_art_url'] ?? null,
+                'user_id' => null,
             ]);
 
             foreach ($links as $link) {
@@ -112,8 +125,9 @@ class SongCatalogService
             }
 
             $this->syncPrimaryFromPreferred($song->fresh());
+            $this->artists->syncSongArtists($song->fresh(), (string) $attributes['artist']);
 
-            return ['song' => $song->fresh()->load(['user:id,name', 'providers']), 'created' => true];
+            return ['song' => $song->fresh()->load(['providers', 'artists']), 'created' => true];
         });
     }
 
@@ -158,6 +172,11 @@ class SongCatalogService
         $incomingLyrics = $attributes['lyrics'] ?? null;
         if (is_string($incomingLyrics) && trim($incomingLyrics) !== '' && trim((string) $song->lyrics) === '') {
             $updates['lyrics'] = $incomingLyrics;
+        }
+
+        $durationMs = $this->normalizeDurationMs($attributes['duration_ms'] ?? null);
+        if ($durationMs && (! $song->duration_ms || $song->duration_ms <= 0)) {
+            $updates['duration_ms'] = $durationMs;
         }
 
         if ($updates !== []) {
@@ -228,7 +247,7 @@ class SongCatalogService
 
         if (! $song->linkFor($provider)) {
             throw ValidationException::withMessages([
-                'provider' => ['Dieser Provider ist für den Song nicht verknüpft.'],
+                'provider' => [__('This provider is not linked for the song.')],
             ]);
         }
 
@@ -274,13 +293,15 @@ class SongCatalogService
      */
     public function upsertProviderLink(Song $song, array $link): SongProvider
     {
-        if (! filled($link['provider']) || ! filled($link['provider_track_id']) || ! filled($link['provider_uri'])) {
+        $provider = strtolower((string) ($link['provider'] ?? ''));
+        $trackId = (string) ($link['provider_track_id'] ?? '');
+        $uri = $this->inferProviderUri($provider, $trackId, $link['provider_uri'] ?? null);
+
+        if ($provider === '' || $trackId === '' || $uri === '') {
             throw ValidationException::withMessages([
-                'providers' => ['Provider-Link unvollständig.'],
+                'providers' => [__('Provider link incomplete.')],
             ]);
         }
-
-        $provider = strtolower((string) $link['provider']);
         $allowed = collect(MusicProvider::cases())->map->value->all();
         if (! in_array($provider, $allowed, true)) {
             throw ValidationException::withMessages([
@@ -291,7 +312,7 @@ class SongCatalogService
         // Move uniqueness conflicts from other songs onto this catalog entry by deleting foreign dupes.
         SongProvider::query()
             ->where('provider', $provider)
-            ->where('provider_track_id', $link['provider_track_id'])
+            ->where('provider_track_id', $trackId)
             ->where('song_id', '!=', $song->id)
             ->delete();
 
@@ -301,8 +322,8 @@ class SongCatalogService
                 'provider' => $provider,
             ],
             [
-                'provider_track_id' => (string) $link['provider_track_id'],
-                'provider_uri' => (string) $link['provider_uri'],
+                'provider_track_id' => $trackId,
+                'provider_uri' => $uri,
                 'album_art_url' => $link['album_art_url'] ?? null,
             ],
         );
@@ -406,8 +427,58 @@ class SongCatalogService
         return $attributes;
     }
 
+    private function inferProviderUri(string $provider, string $trackId, mixed $uri): string
+    {
+        if (is_string($uri) && trim($uri) !== '') {
+            return trim($uri);
+        }
+
+        $trackId = trim($trackId);
+        if ($provider === '' || $trackId === '') {
+            return '';
+        }
+
+        return $provider === MusicProvider::Tidal->value
+            ? 'tidal:track:'.$trackId
+            : 'spotify:track:'.$trackId;
+    }
+
     private function normalize(?string $value): string
     {
         return mb_strtolower(trim((string) $value));
+    }
+
+    private function normalizeDurationMs(mixed $durationMs): ?int
+    {
+        if ($durationMs === null || $durationMs === '') {
+            return null;
+        }
+
+        $value = (int) $durationMs;
+
+        return $value > 0 ? $value : null;
+    }
+
+    public function fillMissingDuration(Song $song): Song
+    {
+        if ($song->duration_ms && $song->duration_ms > 0) {
+            return $song;
+        }
+
+        $song->loadMissing('providers');
+        $spotify = $song->providers->firstWhere('provider', MusicProvider::Spotify->value);
+        $trackId = $spotify?->provider_track_id ?: ($song->provider === MusicProvider::Spotify->value ? $song->provider_track_id : null);
+        if (! filled($trackId)) {
+            return $song;
+        }
+
+        $durationMs = $this->spotify->getTrackDurationMs((string) $trackId);
+        if (! $durationMs) {
+            return $song;
+        }
+
+        $song->forceFill(['duration_ms' => $durationMs])->save();
+
+        return $song->fresh() ?? $song;
     }
 }

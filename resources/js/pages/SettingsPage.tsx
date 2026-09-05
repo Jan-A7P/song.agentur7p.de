@@ -1,13 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import api from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
+import { useI18n } from '@/context/locale-context';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { providerConnectUrl, providerLabel } from '@/lib/music';
+import {
+    isFavoriteSuggestEnabled,
+    setFavoriteSuggestEnabled,
+} from '@/lib/favorite-suggest';
+import { isPartyModeEnabled, setPartyModeEnabled, subscribePartyMode } from '@/lib/party-mode';
+import { SettingsSkeleton } from '@/components/skeletons';
 import type { MusicProviderId } from '@/music/types';
 import type { MusicConnectionStatus, User } from '@/types';
 
@@ -33,13 +40,18 @@ function axiosMessage(err: unknown, fallback: string): string {
 
 export function SettingsPage() {
     const { refreshUser, setUser } = useAuth();
+    const { t, locale, setLocale } = useI18n();
     const [providers, setProviders] = useState<ProviderStatus[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [flash, setFlash] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
+    const [favoriteSuggest, setFavoriteSuggest] = useState(() => isFavoriteSuggestEnabled());
+    const [partyMode, setPartyMode] = useState(() => isPartyModeEnabled());
 
-    const load = async () => {
+    useEffect(() => subscribePartyMode(setPartyMode), []);
+
+    const load = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -66,11 +78,11 @@ export function SettingsPage() {
             );
             setProviders(statuses);
         } catch (err) {
-            setError(axiosMessage(err, 'Status konnte nicht geladen werden.'));
+            setError(axiosMessage(err, t('settings.statusFailed')));
         } finally {
             setLoading(false);
         }
-    };
+    }, [t]);
 
     useEffect(() => {
         void load();
@@ -78,11 +90,15 @@ export function SettingsPage() {
         const spotify = params.get('spotify');
         const tidal = params.get('tidal');
         if (spotify === 'connected' || tidal === 'connected') {
-            setFlash(`${tidal === 'connected' ? 'TIDAL' : 'Spotify'} erfolgreich verbunden.`);
+            setFlash(
+                t('settings.connectedFlash', {
+                    label: tidal === 'connected' ? t('common.tidal') : t('common.spotify'),
+                }),
+            );
             void refreshUser();
         } else if (spotify || tidal) {
-            setFlash('Verbindung fehlgeschlagen oder abgebrochen.');
-            setError('Verbindung fehlgeschlagen oder abgebrochen.');
+            setFlash(t('settings.connectionFailed'));
+            setError(t('settings.connectionFailed'));
         }
         if (spotify || tidal) {
             window.history.replaceState({}, '', '/settings');
@@ -137,8 +153,8 @@ export function SettingsPage() {
 
             setFlash(
                 data.enabled
-                    ? `${providerLabel(provider)} aktiviert.`
-                    : `${providerLabel(provider)} deaktiviert. Die Verbindung bleibt erhalten.`,
+                    ? t('settings.enabledFlash', { label: providerLabel(provider) })
+                    : t('settings.disabledFlash', { label: providerLabel(provider) }),
             );
 
             void load();
@@ -146,7 +162,7 @@ export function SettingsPage() {
             setError(
                 axiosMessage(
                     err,
-                    enabled ? 'Aktivieren fehlgeschlagen.' : 'Deaktivieren fehlgeschlagen.',
+                    enabled ? t('settings.enableFailed') : t('settings.disableFailed'),
                 ),
             );
         } finally {
@@ -161,9 +177,9 @@ export function SettingsPage() {
             await api.post(`/music/${provider}/disconnect`);
             await refreshUser();
             await load();
-            setFlash(`${providerLabel(provider)} getrennt.`);
+            setFlash(t('settings.disconnectedFlash', { label: providerLabel(provider) }));
         } catch (err) {
-            setError(axiosMessage(err, 'Trennen fehlgeschlagen.'));
+            setError(axiosMessage(err, t('settings.disconnectFailed')));
         } finally {
             setBusy(null);
         }
@@ -172,22 +188,91 @@ export function SettingsPage() {
     return (
         <div className="space-y-6">
             <div>
-                <h1 className="font-display text-3xl font-semibold tracking-tight">Einstellungen</h1>
+                <h1 className="font-display text-3xl font-semibold tracking-tight">{t('settings.title')}</h1>
                 <p className="mt-1 text-sm text-muted">
-                    Verbinde Musikdienste und aktiviere sie für Wiedergabe — ohne die OAuth-Verbindung zu verlieren.
+                    {t('settings.subtitle')}
                 </p>
             </div>
+
+            <section className="space-y-3">
+                <h2 className="text-lg font-medium">{t('language.label')}</h2>
+                <p className="text-sm text-muted">{t('language.description')}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                        type="button"
+                        variant={locale === 'de' ? 'accent' : 'outline'}
+                        onClick={() => setLocale('de')}
+                    >
+                        {t('language.de')}
+                    </Button>
+                    <Button
+                        type="button"
+                        variant={locale === 'en' ? 'accent' : 'outline'}
+                        onClick={() => setLocale('en')}
+                    >
+                        {t('language.en')}
+                    </Button>
+                </div>
+            </section>
 
             {flash && <Alert variant="success">{flash}</Alert>}
             {error && <Alert variant="error">{error}</Alert>}
 
             <section className="space-y-3">
-                <h2 className="text-lg font-medium">Musikdienste</h2>
+                <h2 className="text-lg font-medium">{t('settings.playback')}</h2>
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-3">
+                    <div className="min-w-0 flex-1">
+                        <p className="font-medium">{t('settings.favoriteSuggest')}</p>
+                        <p className="mt-1 text-sm text-muted">
+                            {t('settings.favoriteSuggestBody')}
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Label htmlFor="favorite-suggest" className="text-sm text-muted">
+                            {t('common.active')}
+                        </Label>
+                        <Switch
+                            id="favorite-suggest"
+                            checked={favoriteSuggest}
+                            aria-label={t('settings.favoriteSuggestAria')}
+                            onCheckedChange={(next) => {
+                                setFavoriteSuggest(next);
+                                setFavoriteSuggestEnabled(next);
+                            }}
+                        />
+                    </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-3">
+                    <div className="min-w-0 flex-1">
+                        <p className="font-medium">{t('settings.party')}</p>
+                        <p className="mt-1 text-sm text-muted">
+                            {t('settings.partyBody')}
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Label htmlFor="party-mode" className="text-sm text-muted">
+                            {t('common.active')}
+                        </Label>
+                        <Switch
+                            id="party-mode"
+                            checked={partyMode}
+                            aria-label={t('settings.partyAria')}
+                            onCheckedChange={(next) => {
+                                setPartyMode(next);
+                                setPartyModeEnabled(next);
+                            }}
+                        />
+                    </div>
+                </div>
+            </section>
+
+            <section className="space-y-3">
+                <h2 className="text-lg font-medium">{t('settings.services')}</h2>
 
                 {loading && providers.length === 0 ? (
-                    <p className="text-sm text-muted">Laden…</p>
+                    <SettingsSkeleton />
                 ) : providers.length === 0 ? (
-                    <p className="text-sm text-muted">Keine Anbieter verfügbar.</p>
+                    <p className="text-sm text-muted">{t('settings.noProviders')}</p>
                 ) : (
                     providers.map((p) => {
                         const switchId = `provider-enabled-${p.provider}`;
@@ -208,7 +293,7 @@ export function SettingsPage() {
                                                     : undefined
                                             }
                                         >
-                                            {p.connected ? 'Verbunden' : 'Nicht verbunden'}
+                                            {p.connected ? t('settings.connected') : t('settings.notConnected')}
                                         </Badge>
                                         <Badge
                                             className={
@@ -217,17 +302,17 @@ export function SettingsPage() {
                                                     : undefined
                                             }
                                         >
-                                            {p.connected && p.enabled ? 'Aktiv' : 'Inaktiv'}
+                                            {p.connected && p.enabled ? t('common.active') : t('common.inactive')}
                                         </Badge>
                                     </div>
                                     <p className="mt-1 text-sm text-muted">
                                         {!p.configured
-                                            ? `${p.label} ist serverseitig nicht konfiguriert.`
+                                            ? t('settings.notConfigured', { label: p.label })
                                             : !p.connected
-                                              ? 'Verbinden, um Wiedergabe und Import zu nutzen.'
+                                              ? t('settings.connectToUse')
                                               : p.enabled
-                                                ? 'Aktiv für Wiedergabe und Import. Deaktivieren lässt die Verbindung bestehen.'
-                                                : 'Verbunden, aber inaktiv — Tokens bleiben gespeichert.'}
+                                                ? t('settings.activeHint')
+                                                : t('settings.inactiveHint')}
                                     </p>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-3">
@@ -235,13 +320,13 @@ export function SettingsPage() {
                                         <>
                                             <div className="flex items-center gap-2">
                                                 <Label htmlFor={switchId} className="text-sm text-muted">
-                                                    Aktiv
+                                                    {t('common.active')}
                                                 </Label>
                                                 <Switch
                                                     id={switchId}
                                                     checked={p.enabled}
                                                     disabled={toggling}
-                                                    aria-label={`${p.label} aktivieren`}
+                                                    aria-label={t('settings.enableAria', { label: p.label })}
                                                     onCheckedChange={(next) =>
                                                         void onToggleEnabled(p.provider, next)
                                                     }
@@ -253,12 +338,16 @@ export function SettingsPage() {
                                                 disabled={busy === `${p.provider}:disconnect`}
                                                 onClick={() => void onDisconnect(p.provider)}
                                             >
-                                                {busy === `${p.provider}:disconnect` ? 'Trennen…' : 'Trennen'}
+                                                {busy === `${p.provider}:disconnect`
+                                                    ? t('common.disconnecting')
+                                                    : t('common.disconnect')}
                                             </Button>
                                         </>
                                     ) : (
                                         <Button asChild disabled={!p.configured}>
-                                            <a href={providerConnectUrl(p.provider, '/settings')}>Verbinden</a>
+                                            <a href={providerConnectUrl(p.provider, '/settings')}>
+                                                {t('common.connect')}
+                                            </a>
                                         </Button>
                                     )}
                                 </div>

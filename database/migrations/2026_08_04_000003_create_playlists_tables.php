@@ -9,17 +9,17 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('playlists', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->uuid('id')->primary();
+            $table->foreignUuid('user_id')->constrained()->cascadeOnDelete();
             $table->string('name');
             $table->text('description')->nullable();
             $table->timestamps();
         });
 
         Schema::create('playlist_song', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('playlist_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('song_id')->constrained()->cascadeOnDelete();
+            $table->uuid('id')->primary();
+            $table->foreignUuid('playlist_id')->constrained('playlists')->cascadeOnDelete();
+            $table->foreignUuid('song_id')->constrained('songs')->cascadeOnDelete();
             $table->unsignedInteger('position')->default(0);
             $table->timestamps();
 

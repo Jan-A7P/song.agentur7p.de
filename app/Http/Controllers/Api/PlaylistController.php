@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Playlist;
 use App\Models\Song;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -41,13 +42,9 @@ class PlaylistController extends Controller
         return response()->json(['data' => $playlist], 201);
     }
 
-    public function show(Playlist $playlist): JsonResponse
+    public function show(Request $request, Playlist $playlist): JsonResponse
     {
-        $playlist->load([
-            'user:id,name',
-            'songs' => fn ($query) => $query->with('user:id,name'),
-        ]);
-        $playlist->loadCount('songs');
+        $this->loadPlaylistDetail($playlist, $request->user('web') ?? $request->user());
 
         return response()->json(['data' => $playlist]);
     }
@@ -81,18 +78,18 @@ class PlaylistController extends Controller
         $this->authorizeOwner($request, $playlist);
 
         $validated = $request->validate([
-            'song_id' => ['required', 'integer', 'exists:songs,id'],
+            'song_id' => ['required', 'uuid', 'exists:songs,id'],
         ]);
 
         if ($playlist->songs()->where('song_id', $validated['song_id'])->exists()) {
-            return response()->json(['message' => 'Song ist bereits in der Playlist.'], 422);
+            return response()->json(['message' => __('Song already in playlist.')], 422);
         }
 
         $position = (int) $playlist->songs()->max('playlist_song.position') + 1;
 
         $playlist->songs()->attach($validated['song_id'], ['position' => $position]);
 
-        return $this->show($playlist);
+        return $this->show($request, $playlist);
     }
 
     public function removeSong(Request $request, Playlist $playlist, Song $song): JsonResponse
@@ -103,7 +100,7 @@ class PlaylistController extends Controller
 
         $this->normalizePositions($playlist);
 
-        return $this->show($playlist);
+        return $this->show($request, $playlist);
     }
 
     public function reorder(Request $request, Playlist $playlist): JsonResponse
@@ -112,7 +109,7 @@ class PlaylistController extends Controller
 
         $validated = $request->validate([
             'song_ids' => ['required', 'array', 'min:1'],
-            'song_ids.*' => ['integer', 'distinct', 'exists:songs,id'],
+            'song_ids.*' => ['uuid', 'distinct', 'exists:songs,id'],
         ]);
 
         $existingIds = $playlist->songs()->pluck('songs.id')->all();
@@ -124,7 +121,7 @@ class PlaylistController extends Controller
 
         if ($existingIds !== $sortedIncoming) {
             return response()->json([
-                'message' => 'Die Song-Liste stimmt nicht mit der Playlist überein.',
+                'message' => __('Playlist song list mismatch.'),
             ], 422);
         }
 
@@ -136,12 +133,35 @@ class PlaylistController extends Controller
             }
         });
 
-        return $this->show($playlist);
+        return $this->show($request, $playlist);
+    }
+
+    private function loadPlaylistDetail(Playlist $playlist, ?User $user): void
+    {
+        $playlist->load([
+            'user:id,name',
+            'songs' => function ($query) use ($user) {
+                $query->with('providers');
+
+                if ($user) {
+                    $query->withExists([
+                        'favoritedBy as is_favorited' => fn ($builder) => $builder->where('users.id', $user->id),
+                    ]);
+                }
+            },
+        ]);
+        $playlist->loadCount('songs');
+
+        if (! $user) {
+            foreach ($playlist->songs as $song) {
+                $song->setAttribute('is_favorited', false);
+            }
+        }
     }
 
     private function authorizeOwner(Request $request, Playlist $playlist): void
     {
-        abort_unless($playlist->user_id === $request->user()->id, 403, 'Nicht berechtigt.');
+        abort_unless($playlist->user_id === $request->user()->id, 403, __('Not authorized.'));
     }
 
     private function normalizePositions(Playlist $playlist): void

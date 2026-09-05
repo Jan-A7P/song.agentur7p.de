@@ -1,10 +1,14 @@
 <?php
 
+use App\Http\Controllers\Api\ArtistController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\DiscoveryController;
 use App\Http\Controllers\Api\ListeningRoomController;
 use App\Http\Controllers\Api\LyricsController;
 use App\Http\Controllers\Api\MusicController;
 use App\Http\Controllers\Api\PlaylistController;
+use App\Http\Controllers\Api\ProfileController;
+use App\Http\Controllers\Api\RadioController;
 use App\Http\Controllers\Api\SongController;
 use Illuminate\Support\Facades\Route;
 
@@ -14,12 +18,22 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::get('/songs', [SongController::class, 'index']);
 Route::get('/songs/{song}', [SongController::class, 'show']);
 
+Route::get('/artists', [ArtistController::class, 'index']);
+Route::get('/artists/{artist}', [ArtistController::class, 'show']);
+
 Route::get('/playlists', [PlaylistController::class, 'index']);
 Route::get('/playlists/{playlist}', [PlaylistController::class, 'show']);
+
+Route::get('/radio/queue', [RadioController::class, 'queue']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'user']);
     Route::post('/logout', [AuthController::class, 'logout']);
+
+    Route::patch('/profile', [ProfileController::class, 'update']);
+    Route::post('/profile/avatar', [ProfileController::class, 'uploadAvatar']);
+    Route::delete('/profile/avatar', [ProfileController::class, 'destroyAvatar']);
+    Route::delete('/profile', [ProfileController::class, 'destroy']);
 
     Route::post('/songs', [SongController::class, 'store']);
     Route::put('/songs/{song}', [SongController::class, 'update']);
@@ -28,6 +42,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/songs/{song}/plays/{play}', [SongController::class, 'updatePlay']);
     Route::post('/songs/{song}/favorite', [SongController::class, 'favorite']);
     Route::delete('/songs/{song}/favorite', [SongController::class, 'unfavorite']);
+
+    Route::get('/discover/feed', [DiscoveryController::class, 'feed']);
+    Route::post('/discover/swipe', [DiscoveryController::class, 'swipe']);
     Route::delete('/songs/{song}', [SongController::class, 'destroy']);
 
     Route::post('/playlists', [PlaylistController::class, 'store']);

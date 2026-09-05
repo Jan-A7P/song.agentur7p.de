@@ -28,6 +28,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
+import { AppTooltip } from '@/components/ui/tooltip';
+import { FavoriteButton } from '@/components/FavoriteButton';
 import {
     Dialog,
     DialogBody,
@@ -38,21 +40,30 @@ import {
     DialogTitle,
     DialogTrigger,
 } from '@/components/ui/dialog';
+import { subscribeFavoriteChange } from '@/lib/favorite-sync';
+import { PlaylistShowSkeleton } from '@/components/skeletons';
+import { ArtistLinks } from '@/components/ArtistLinks';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/context/locale-context';
 
 function SortableSongRow({
     song,
     isOwner,
+    isCurrent,
     isPlayingHere,
     onPlay,
     onRemove,
+    onFavoriteChange,
 }: {
     song: Song;
     isOwner: boolean;
+    isCurrent: boolean;
     isPlayingHere: boolean;
     onPlay: () => void;
     onRemove: () => void;
+    onFavoriteChange: (favorited: boolean) => void;
 }) {
+    const { t } = useI18n();
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
         id: song.id,
         disabled: !isOwner,
@@ -68,32 +79,45 @@ function SortableSongRow({
             ref={setNodeRef}
             style={style}
             className={cn(
-                'flex items-center gap-2 rounded-xl border border-transparent bg-surface px-2 py-2 sm:gap-3 sm:px-3',
+                'flex items-center gap-2 rounded-xl border px-2 py-2 sm:gap-3 sm:px-3',
                 isDragging && 'z-10 border-line bg-paper shadow-lg',
+                !isDragging && isCurrent && 'border-accent/30 bg-accent/10',
+                !isDragging && !isCurrent && 'border-transparent bg-surface',
             )}
         >
             {isOwner && (
-                <button
-                    type="button"
-                    className="cursor-grab touch-none rounded p-1 text-muted hover:bg-paper-2 hover:text-ink active:cursor-grabbing"
-                    aria-label="Verschieben"
-                    {...attributes}
-                    {...listeners}
-                >
-                    <GripVertical className="h-4 w-4" />
-                </button>
+                <AppTooltip label={t('playlists.move')}>
+                    <button
+                        type="button"
+                        className="cursor-grab touch-none rounded p-1 text-muted hover:bg-paper-2 hover:text-ink active:cursor-grabbing"
+                        aria-label={t('playlists.move')}
+                        {...attributes}
+                        {...listeners}
+                    >
+                        <GripVertical className="h-4 w-4" />
+                    </button>
+                </AppTooltip>
             )}
 
             {song.album_art_url ? (
                 <img src={song.album_art_url} alt="" className="h-11 w-11 rounded object-cover" />
             ) : (
-                <div className="flex h-11 w-11 items-center justify-center rounded bg-paper-2 text-xs text-muted">—</div>
+                <div className="flex h-11 w-11 items-center justify-center rounded bg-paper-2 text-xs text-muted">
+                    {t('common.dash')}
+                </div>
             )}
 
-            <Link to={`/songs/${song.id}`} className="min-w-0 flex-1">
-                <p className="truncate font-medium hover:text-accent">{song.title}</p>
-                <p className="truncate text-sm text-muted">{song.artist}</p>
-            </Link>
+            <div className="min-w-0 flex-1">
+                <Link
+                    to={`/songs/${song.id}`}
+                    className={cn('block truncate font-medium hover:text-accent', isCurrent && 'text-accent')}
+                >
+                    {song.title}
+                </Link>
+                <p className="truncate text-sm text-muted">
+                    <ArtistLinks artists={song.artists} artist={song.artist} />
+                </p>
+            </div>
 
             <div className="hidden flex-wrap justify-end gap-1 sm:flex">
                 {songProviderLinks(song).map((link) => (
@@ -109,16 +133,32 @@ function SortableSongRow({
                 ))}
             </div>
 
+            <FavoriteButton
+                songId={song.id}
+                favorited={Boolean(song.is_favorited)}
+                onChange={onFavoriteChange}
+            />
+
             {songIsPlayable(song) && (
-                <Button type="button" variant="accent" size="icon" onClick={onPlay} aria-label={isPlayingHere ? 'Pause' : 'Play'}>
-                    {isPlayingHere ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                </Button>
+                <AppTooltip label={isPlayingHere ? t('common.pause') : t('common.play')}>
+                    <Button
+                        type="button"
+                        variant="accent"
+                        size="icon"
+                        onClick={onPlay}
+                        aria-label={isPlayingHere ? t('common.pause') : t('common.play')}
+                    >
+                        {isPlayingHere ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                    </Button>
+                </AppTooltip>
             )}
 
             {isOwner && (
-                <Button type="button" variant="ghost" size="icon" onClick={onRemove} aria-label="Entfernen">
-                    <Trash2 className="h-4 w-4" />
-                </Button>
+                <AppTooltip label={t('playlists.remove')}>
+                    <Button type="button" variant="ghost" size="icon" onClick={onRemove} aria-label={t('playlists.remove')}>
+                        <Trash2 className="h-4 w-4" />
+                    </Button>
+                </AppTooltip>
             )}
         </li>
     );
@@ -134,14 +174,23 @@ export function PlaylistShowPage() {
     const { id } = useParams();
     const location = useLocation();
     const { user } = useAuth();
-    const { track, playing, playTrack, playPlaylist, toggle, shuffle } = usePlayer();
+    const { track, playing, playTrack, playPlaylist, toggle, shuffle, syncPlaylistQueue } = usePlayer();
     const navigate = useNavigate();
+    const { t } = useI18n();
     const [playlist, setPlaylist] = useState<Playlist | null>(null);
     const [songs, setSongs] = useState<Song[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [flash, setFlash] = useState<string | null>(() => {
-        const imported = (location.state as { importedTracks?: number } | null)?.importedTracks;
-        return typeof imported === 'number' ? `${imported} Songs importiert.` : null;
+        const state = location.state as { importedTracks?: number; lyricsFound?: number } | null;
+        const imported = state?.importedTracks;
+        if (typeof imported !== 'number') {
+            return null;
+        }
+        const lyricsFound = typeof state?.lyricsFound === 'number' ? state.lyricsFound : 0;
+        if (lyricsFound > 0) {
+            return t('playlists.importedLyrics', { count: lyricsFound, songs: imported, lyrics: lyricsFound });
+        }
+        return t('playlists.imported', { count: imported });
     });
     const [savingOrder, setSavingOrder] = useState(false);
     const [showAdd, setShowAdd] = useState(false);
@@ -169,11 +218,19 @@ export function PlaylistShowPage() {
             try {
                 await loadPlaylist();
             } catch {
-                setError('Playlist nicht gefunden.');
+                setError(t('playlists.notFound'));
             }
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id]);
+
+    useEffect(() => {
+        return subscribeFavoriteChange((songId, favorited) => {
+            setSongs((prev) =>
+                prev.map((song) => (song.id === songId ? { ...song, is_favorited: favorited } : song)),
+            );
+        });
+    }, []);
 
     useEffect(() => {
         if (!showAdd) {
@@ -226,9 +283,13 @@ export function PlaylistShowPage() {
                 song_ids: nextSongs.map((song) => song.id),
             });
             setPlaylist(data.data);
-            setSongs(data.data.songs ?? nextSongs);
+            const ordered = data.data.songs ?? nextSongs;
+            setSongs(ordered);
+            if (id) {
+                syncPlaylistQueue(id, toPlayerTracks(ordered, user));
+            }
         } catch {
-            setError('Reihenfolge konnte nicht gespeichert werden.');
+            setError(t('playlists.orderFailed'));
             await loadPlaylist();
         } finally {
             setSavingOrder(false);
@@ -266,9 +327,13 @@ export function PlaylistShowPage() {
         try {
             const { data } = await api.post<{ data: Playlist }>(`/playlists/${id}/songs`, { song_id: song.id });
             setPlaylist(data.data);
-            setSongs(data.data.songs ?? []);
+            const ordered = data.data.songs ?? [];
+            setSongs(ordered);
+            if (id) {
+                syncPlaylistQueue(id, toPlayerTracks(ordered, user));
+            }
         } catch {
-            setError('Song konnte nicht hinzugefügt werden.');
+            setError(t('playlists.addFailed'));
             setAddedIds((prev) => {
                 const next = new Set(prev);
                 next.delete(song.id);
@@ -280,29 +345,33 @@ export function PlaylistShowPage() {
         }
     };
 
-    const removeSong = async (songId: number) => {
+    const removeSong = async (songId: string) => {
         setError(null);
         const previous = songs;
         setSongs((prev) => prev.filter((song) => song.id !== songId));
         try {
             const { data } = await api.delete<{ data: Playlist }>(`/playlists/${id}/songs/${songId}`);
             setPlaylist(data.data);
-            setSongs(data.data.songs ?? []);
+            const ordered = data.data.songs ?? [];
+            setSongs(ordered);
+            if (id) {
+                syncPlaylistQueue(id, toPlayerTracks(ordered, user));
+            }
         } catch {
-            setError('Song konnte nicht entfernt werden.');
+            setError(t('playlists.removeFailed'));
             setSongs(previous);
         }
     };
 
     const onDelete = async () => {
-        if (!playlist || !confirm('Playlist wirklich löschen?')) {
+        if (!playlist || !window.confirm(t('playlists.confirmDelete'))) {
             return;
         }
         try {
             await api.delete(`/playlists/${playlist.id}`);
             navigate('/playlists');
         } catch {
-            setError('Löschen fehlgeschlagen.');
+            setError(t('playlists.deleteFailed'));
         }
     };
 
@@ -352,7 +421,7 @@ export function PlaylistShowPage() {
         }
         const playable = toPlayerTracks(songs, user);
         if (playable.length === 0) {
-            setError('Keine abspielbaren Tracks in der Playlist.');
+            setError(t('playlists.noPlayable'));
             return;
         }
         await playPlaylist(playable, {
@@ -367,56 +436,70 @@ export function PlaylistShowPage() {
     }
 
     if (!playlist) {
-        return <p className="text-muted">Laden…</p>;
+        return <PlaylistShowSkeleton />;
     }
 
     return (
         <div className="space-y-8">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
+            <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
                     <p className="text-sm text-muted">
                         <Link to="/playlists" className="hover:text-accent">
-                            ← Playlists
+                            {t('playlists.back')}
                         </Link>
                     </p>
-                    <h1 className="font-display text-4xl font-semibold tracking-tight">{playlist.name}</h1>
+                    <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">{playlist.name}</h1>
                     {playlist.description && <p className="mt-2 max-w-2xl text-muted">{playlist.description}</p>}
                     <p className="mt-2 text-sm text-muted">
-                        {songs.length} Songs
-                        {playlist.user ? ` · ${playlist.user.name}` : ''}
-                        {savingOrder ? ' · speichern…' : ''}
+                        {t('common.songCount', { count: songs.length })}
+                        {playlist.user ? t('playlists.ownerSuffix', { name: playlist.user.name }) : ''}
+                        {savingOrder ? t('playlists.savingOrder') : ''}
                     </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex shrink-0 flex-nowrap items-center gap-2">
                     {songs.some((song) => songIsPlayable(song)) && (
                         <>
-                            <Button type="button" variant="accent" onClick={() => void onPlayAll(false)}>
-                                <Play className="h-4 w-4" />
-                                Abspielen
-                            </Button>
-                            <Button type="button" variant="outline" onClick={() => void onPlayAll(true)}>
-                                <Shuffle className="h-4 w-4" />
-                                Zufällig
-                            </Button>
+                            <AppTooltip label={t('common.play')}>
+                                <Button
+                                    type="button"
+                                    variant="accent"
+                                    size="icon"
+                                    onClick={() => void onPlayAll(false)}
+                                    aria-label={t('common.play')}
+                                >
+                                    <Play className="h-4 w-4" />
+                                </Button>
+                            </AppTooltip>
+                            <AppTooltip label={t('player.shuffleAria')}>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => void onPlayAll(true)}
+                                    aria-label={t('player.shuffleAria')}
+                                >
+                                    <Shuffle className="h-4 w-4" />
+                                </Button>
+                            </AppTooltip>
                         </>
                     )}
 
                     {isOwner && (
                         <Dialog open={showAdd} onOpenChange={setShowAdd}>
-                            <DialogTrigger asChild>
-                                <Button type="button" variant="outline">
-                                    <ListPlus className="h-4 w-4" />
-                                    Song hinzufügen
-                                </Button>
-                            </DialogTrigger>
+                            <AppTooltip label={t('playlists.addSong')}>
+                                <DialogTrigger asChild>
+                                    <Button type="button" variant="outline" size="icon" aria-label={t('playlists.addSong')}>
+                                        <ListPlus className="h-4 w-4" />
+                                    </Button>
+                                </DialogTrigger>
+                            </AppTooltip>
 
                             <DialogContent>
                                 <DialogHeader>
-                                    <DialogTitle>Song hinzufügen</DialogTitle>
+                                    <DialogTitle>{t('playlists.addSong')}</DialogTitle>
                                     <DialogDescription>
-                                        Suche und füge Songs zu{' '}
-                                        <span className="font-medium text-ink">{playlist.name}</span> hinzu.
+                                        {t('playlists.addSongTo', { name: playlist.name })}
                                     </DialogDescription>
                                 </DialogHeader>
 
@@ -426,7 +509,7 @@ export function PlaylistShowPage() {
                                         <Input
                                             className="pl-9"
                                             autoFocus
-                                            placeholder="Titel oder Artist…"
+                                            placeholder={t('playlists.searchPlaceholder')}
                                             value={songQuery}
                                             onChange={(e) => setSongQuery(e.target.value)}
                                         />
@@ -435,11 +518,11 @@ export function PlaylistShowPage() {
                                     {searching ? (
                                         <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted">
                                             <Loader2 className="h-4 w-4 animate-spin" />
-                                            Suche…
+                                            {t('common.searching')}
                                         </div>
                                     ) : songResults.length === 0 ? (
                                         <p className="py-8 text-center text-sm text-muted">
-                                            Keine passenden Songs.
+                                            {t('playlists.noMatching')}
                                         </p>
                                     ) : (
                                         <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
@@ -477,7 +560,7 @@ export function PlaylistShowPage() {
                                                                 </span>
                                                             </span>
                                                             <span className="text-xs font-medium text-accent">
-                                                                {busy ? '…' : 'Hinzufügen'}
+                                                                {busy ? t('common.adding') : t('common.add')}
                                                             </span>
                                                         </button>
                                                     </li>
@@ -489,14 +572,14 @@ export function PlaylistShowPage() {
                                     {addedIds.size > 0 && (
                                         <p className="flex items-center gap-1.5 text-sm text-success">
                                             <Check className="h-3.5 w-3.5" />
-                                            {addedIds.size} Song{addedIds.size === 1 ? '' : 's'} hinzugefügt
+                                            {t('playlists.addedCount', { count: addedIds.size })}
                                         </p>
                                     )}
                                 </DialogBody>
 
                                 <DialogFooter className="flex justify-end">
                                     <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdd(false)}>
-                                        Fertig
+                                        {t('common.done')}
                                     </Button>
                                 </DialogFooter>
                             </DialogContent>
@@ -504,9 +587,17 @@ export function PlaylistShowPage() {
                     )}
 
                     {isOwner && (
-                        <Button type="button" variant="destructive" onClick={() => void onDelete()}>
-                            Löschen
-                        </Button>
+                        <AppTooltip label={t('playlists.deletePlaylist')}>
+                            <Button
+                                type="button"
+                                variant="destructive"
+                                size="icon"
+                                onClick={() => void onDelete()}
+                                aria-label={t('playlists.deletePlaylist')}
+                            >
+                                <Trash2 className="h-4 w-4" />
+                            </Button>
+                        </AppTooltip>
                     )}
                 </div>
             </div>
@@ -514,36 +605,46 @@ export function PlaylistShowPage() {
             {flash && <Alert variant="success">{flash}</Alert>}
             {error && <Alert variant="error">{error}</Alert>}
             {shuffle && (
-                <p className="text-xs text-muted">Zufallsmodus aktiv — jeder Song kommt einmal pro Rotation.</p>
+                <p className="text-xs text-muted">{t('playlists.shuffleHint')}</p>
             )}
 
             {songs.length === 0 ? (
-                <p className="text-muted">Noch keine Songs in dieser Playlist.</p>
+                <p className="text-muted">{t('playlists.emptyPlaylist')}</p>
             ) : (
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
                     <SortableContext items={songIds} strategy={verticalListSortingStrategy}>
                         <ul className="space-y-2">
-                            {songs.map((song) => (
+                            {songs.map((song) => {
+                                const isCurrent = Boolean(
+                                    track?.songId === song.id ||
+                                        songProviderLinks(song).some((l) => l.provider_uri === track?.uri),
+                                );
+                                return (
                                 <SortableSongRow
                                     key={song.id}
                                     song={song}
                                     isOwner={isOwner}
-                                    isPlayingHere={
-                                        (track?.songId === song.id ||
-                                            songProviderLinks(song).some((l) => l.provider_uri === track?.uri)) &&
-                                        playing
-                                    }
+                                    isCurrent={isCurrent}
+                                    isPlayingHere={isCurrent && playing}
                                     onPlay={() => void onPlaySong(song)}
                                     onRemove={() => void removeSong(song.id)}
+                                    onFavoriteChange={(favorited) =>
+                                        setSongs((prev) =>
+                                            prev.map((item) =>
+                                                item.id === song.id ? { ...item, is_favorited: favorited } : item,
+                                            ),
+                                        )
+                                    }
                                 />
-                            ))}
+                                );
+                            })}
                         </ul>
                     </SortableContext>
                 </DndContext>
             )}
 
             {isOwner && songs.length > 1 && (
-                <p className="text-xs text-muted">Ziehe Songs am Griff, um die Reihenfolge zu ändern.</p>
+                <p className="text-xs text-muted">{t('playlists.dragHint')}</p>
             )}
         </div>
     );

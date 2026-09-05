@@ -61,6 +61,7 @@ export function Slider({
         }
 
         event.currentTarget.setPointerCapture(event.pointerId);
+        event.currentTarget.focus({ preventScroll: true });
         setDragging(true);
         const next = valueFromClientX(event.clientX);
         onChange(next);

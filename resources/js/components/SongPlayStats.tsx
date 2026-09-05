@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
+import { useI18n } from '@/context/locale-context';
+import { dateLocale, type Locale, type TranslateParams } from '@/i18n';
 import { providerLabel } from '@/lib/music';
 import type { SongDailyStat, SongPlayHistoryItem, SongStats } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -13,6 +15,8 @@ import {
     DialogTrigger,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+
+type Translate = (key: string, params?: TranslateParams) => string;
 
 function formatListenTime(ms: number): string {
     if (!Number.isFinite(ms) || ms < 1000) {
@@ -31,29 +35,29 @@ function formatListenTime(ms: number): string {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-function formatListenDuration(ms: number): string {
+function formatListenDuration(ms: number, t: Translate): string {
     if (!Number.isFinite(ms) || ms < 1000) {
-        return 'unter 1 Min.';
+        return t('stats.underOneMin');
     }
 
     const minutes = Math.round(ms / 60000);
     if (minutes < 60) {
-        return `${minutes} Min.`;
+        return t('stats.minutes', { count: minutes });
     }
 
     const hours = Math.floor(minutes / 60);
     const rest = minutes % 60;
-    return rest > 0 ? `${hours} Std. ${rest} Min.` : `${hours} Std.`;
+    return rest > 0 ? t('stats.hoursMinutes', { hours, minutes: rest }) : t('stats.hours', { hours });
 }
 
-function formatPlayedAt(value: string | null): string {
+function formatPlayedAt(value: string | null, t: Translate, locale: Locale): string {
     if (!value) {
-        return 'noch nie';
+        return t('stats.never');
     }
 
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
-        return '—';
+        return t('common.dash');
     }
 
     const now = Date.now();
@@ -63,31 +67,28 @@ function formatPlayedAt(value: string | null): string {
     const day = 24 * hour;
 
     if (diffMs < minute) {
-        return 'gerade eben';
+        return t('stats.justNow');
     }
     if (diffMs < hour) {
-        const mins = Math.floor(diffMs / minute);
-        return `vor ${mins} Min.`;
+        return t('stats.minutesAgo', { count: Math.floor(diffMs / minute) });
     }
     if (diffMs < day) {
-        const hours = Math.floor(diffMs / hour);
-        return `vor ${hours} Std.`;
+        return t('stats.hoursAgo', { count: Math.floor(diffMs / hour) });
     }
     if (diffMs < 7 * day) {
-        const days = Math.floor(diffMs / day);
-        return `vor ${days} Tag${days === 1 ? '' : 'en'}`;
+        return t('stats.daysAgo', { count: Math.floor(diffMs / day) });
     }
 
-    return date.toLocaleDateString('de-DE', {
+    return date.toLocaleDateString(dateLocale(locale), {
         day: 'numeric',
         month: 'short',
         year: date.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
     });
 }
 
-function formatDayLabel(date: string): string {
+function formatDayLabel(date: string, locale: Locale): string {
     const d = new Date(`${date}T12:00:00`);
-    return d.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
+    return d.toLocaleDateString(dateLocale(locale), { day: 'numeric', month: 'short' });
 }
 
 type Metric = 'plays' | 'listen_ms';
@@ -98,6 +99,7 @@ type SongPlayStatsProps = {
 };
 
 export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
+    const { t, locale } = useI18n();
     const my = stats.my;
     const daily = stats.daily ?? [];
     const songDurationMs = stats.duration_ms && stats.duration_ms > 0 ? stats.duration_ms : null;
@@ -115,10 +117,10 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
         <section className={cn('space-y-5', className)}>
             <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
-                    <h2 className="font-display text-xl font-semibold tracking-tight">Statistik</h2>
+                    <h2 className="font-display text-xl font-semibold tracking-tight">{t('stats.title')}</h2>
                     <p className="text-sm text-muted">
-                        Verlauf der letzten 30 Tage
-                        {songDurationMs ? ` · Songlänge ${formatListenTime(songDurationMs)}` : ''}.
+                        {t('stats.last30')}
+                        {songDurationMs ? t('stats.songLength', { time: formatListenTime(songDurationMs) }) : '.'}
                     </p>
                 </div>
 
@@ -131,7 +133,7 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
                             metric === 'plays' ? 'bg-ink text-paper' : 'text-muted hover:text-ink',
                         )}
                     >
-                        Wiedergaben
+                        {t('stats.plays')}
                     </button>
                     <button
                         type="button"
@@ -141,7 +143,7 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
                             metric === 'listen_ms' ? 'bg-ink text-paper' : 'text-muted hover:text-ink',
                         )}
                     >
-                        Hörzeit / Play
+                        {t('stats.listenPerPlay')}
                     </button>
                 </div>
             </div>
@@ -152,11 +154,13 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
                 songDurationMs={songDurationMs}
                 hoverIndex={hoverIndex}
                 onHover={setHoverIndex}
+                t={t}
+                locale={locale}
             />
 
             <dl className="grid grid-cols-3 gap-4 border-y border-line py-4">
                 <div>
-                    <dt className="text-xs uppercase tracking-wide text-muted">30 Tage</dt>
+                    <dt className="text-xs uppercase tracking-wide text-muted">{t('stats.days30')}</dt>
                     <dd className="mt-1 font-display text-2xl font-semibold tabular-nums tracking-tight">
                         {metric === 'plays'
                             ? periodTotals.plays
@@ -164,25 +168,27 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
                     </dd>
                     <p className="mt-0.5 text-xs text-muted">
                         {metric === 'plays'
-                            ? 'Wiedergaben'
+                            ? t('stats.plays')
                             : songDurationMs
-                              ? `Ø von ${formatListenTime(songDurationMs)}`
-                              : 'Ø pro Wiedergabe'}
+                              ? t('stats.avgOf', { time: formatListenTime(songDurationMs) })
+                              : t('stats.avgPerPlay')}
                     </p>
                 </div>
                 <div>
-                    <dt className="text-xs uppercase tracking-wide text-muted">Gesamt</dt>
+                    <dt className="text-xs uppercase tracking-wide text-muted">{t('stats.total')}</dt>
                     <dd className="mt-1 font-display text-2xl font-semibold tabular-nums tracking-tight">
                         {stats.play_count}
                     </dd>
                     {stats.completed_count > 0 && (
-                        <p className="mt-0.5 text-xs text-muted">{stats.completed_count}× durchgehört</p>
+                        <p className="mt-0.5 text-xs text-muted">
+                            {t('stats.completedCount', { count: stats.completed_count })}
+                        </p>
                     )}
                 </div>
                 <div>
-                    <dt className="text-xs uppercase tracking-wide text-muted">Zuletzt</dt>
+                    <dt className="text-xs uppercase tracking-wide text-muted">{t('stats.last')}</dt>
                     <dd className="mt-1 font-display text-lg font-semibold tracking-tight sm:text-2xl">
-                        {formatPlayedAt(stats.last_played_at)}
+                        {formatPlayedAt(stats.last_played_at, t, locale)}
                     </dd>
                 </div>
             </dl>
@@ -190,20 +196,20 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
             {my && my.play_count > 0 && (
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <p className="text-sm text-muted">
-                        Von dir:{' '}
-                        <span className="text-ink tabular-nums">{my.play_count}×</span>
+                        {t('stats.fromYou')}{' '}
+                        <span className="text-ink tabular-nums">{t('stats.times', { count: my.play_count })}</span>
                         {' · '}
-                        <span className="text-ink tabular-nums">{formatListenDuration(my.total_listen_ms)}</span>
+                        <span className="text-ink tabular-nums">{formatListenDuration(my.total_listen_ms, t)}</span>
                         {my.completed_count > 0 && (
                             <>
                                 {' · '}
-                                <span className="text-ink tabular-nums">{my.completed_count}×</span> durchgehört
+                                {t('stats.completedCount', { count: my.completed_count })}
                             </>
                         )}
                         {my.last_played_at && (
                             <>
                                 {' · '}
-                                zuletzt {formatPlayedAt(my.last_played_at)}
+                                {t('stats.lastRelative', { relative: formatPlayedAt(my.last_played_at, t, locale) })}
                             </>
                         )}
                     </p>
@@ -212,14 +218,14 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
                         <Dialog>
                             <DialogTrigger asChild>
                                 <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted">
-                                    Letzte Plays
+                                    {t('stats.recentPlays')}
                                 </Button>
                             </DialogTrigger>
                             <DialogContent>
                                 <DialogHeader>
-                                    <DialogTitle>Letzte Plays</DialogTitle>
+                                    <DialogTitle>{t('stats.recentPlays')}</DialogTitle>
                                     <DialogDescription>
-                                        Deine letzten Wiedergaben dieses Songs.
+                                        {t('stats.recentPlaysHint')}
                                     </DialogDescription>
                                 </DialogHeader>
                                 <DialogBody className="max-h-[min(60vh,28rem)]">
@@ -229,6 +235,8 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
                                                 key={play.id}
                                                 play={play}
                                                 songDurationMs={songDurationMs}
+                                                t={t}
+                                                locale={locale}
                                             />
                                         ))}
                                     </ul>
@@ -240,7 +248,7 @@ export function SongPlayStats({ stats, className }: SongPlayStatsProps) {
             )}
 
             {stats.play_count === 0 && (
-                <p className="text-sm text-muted">Noch keine Wiedergaben für diesen Song.</p>
+                <p className="text-sm text-muted">{t('stats.noPlays')}</p>
             )}
         </section>
     );
@@ -252,12 +260,16 @@ function PlayActivityChart({
     songDurationMs,
     hoverIndex,
     onHover,
+    t,
+    locale,
 }: {
     daily: SongDailyStat[];
     metric: Metric;
     songDurationMs: number | null;
     hoverIndex: number | null;
     onHover: (index: number | null) => void;
+    t: Translate;
+    locale: Locale;
 }) {
     const width = 640;
     const height = 180;
@@ -326,11 +338,7 @@ function PlayActivityChart({
                 viewBox={`0 0 ${width} ${height}`}
                 className="h-44 w-full overflow-visible sm:h-48"
                 role="img"
-                aria-label={
-                    metric === 'plays'
-                        ? 'Wiedergaben der letzten 30 Tage'
-                        : 'Durchschnittliche Hörzeit pro Wiedergabe der letzten 30 Tage'
-                }
+                aria-label={metric === 'plays' ? t('stats.plays30') : t('stats.avgListen30')}
                 onMouseLeave={() => onHover(null)}
             >
                 <defs>
@@ -434,7 +442,7 @@ function PlayActivityChart({
                             textAnchor={index === 0 ? 'start' : index === daily.length - 1 ? 'end' : 'middle'}
                             className="fill-muted text-[11px]"
                         >
-                            {formatDayLabel(point.day.date)}
+                            {formatDayLabel(point.day.date, locale)}
                         </text>
                     );
                 })}
@@ -458,31 +466,32 @@ function PlayActivityChart({
             <div className="pointer-events-none absolute inset-x-0 top-2 flex justify-center">
                 {active ? (
                     <div className="rounded-full border border-line bg-paper/95 px-3 py-1 text-xs shadow-sm backdrop-blur">
-                        <span className="text-muted">{formatDayLabel(active.day.date)}</span>
+                        <span className="text-muted">{formatDayLabel(active.day.date, locale)}</span>
                         <span className="mx-1.5 text-line">·</span>
                         <span className="font-medium tabular-nums">
                             {metric === 'plays' ? (
-                                `${active.value}×`
+                                t('stats.times', { count: active.value })
                             ) : songDurationMs ? (
-                                <>
-                                    Ø {formatListenTime(active.value)} / {formatListenTime(songDurationMs)}
-                                    {active.value > 0
-                                        ? ` (${Math.min(100, Math.round((active.value / songDurationMs) * 100))}%)`
-                                        : ''}
-                                </>
+                                t('stats.avgVs', {
+                                    heard: formatListenTime(active.value),
+                                    total: formatListenTime(songDurationMs),
+                                    pct: active.value > 0
+                                        ? Math.min(100, Math.round((active.value / songDurationMs) * 100))
+                                        : 0,
+                                })
                             ) : (
-                                `Ø ${formatListenTime(active.value)}`
+                                t('stats.avg', { time: formatListenTime(active.value) })
                             )}
                         </span>
                         {metric === 'listen_ms' && active.day.plays > 0 && (
                             <>
                                 <span className="mx-1.5 text-line">·</span>
-                                <span className="text-muted">{active.day.plays}×</span>
+                                <span className="text-muted">{t('stats.times', { count: active.day.plays })}</span>
                             </>
                         )}
                     </div>
                 ) : !hasActivity ? (
-                    <p className="text-xs text-muted">In den letzten 30 Tagen keine Aktivität.</p>
+                    <p className="text-xs text-muted">{t('stats.noActivity')}</p>
                 ) : null}
             </div>
         </div>
@@ -492,29 +501,33 @@ function PlayActivityChart({
 function PlayHistoryRow({
     play,
     songDurationMs,
+    t,
+    locale,
 }: {
     play: SongPlayHistoryItem;
     songDurationMs: number | null;
+    t: Translate;
+    locale: Locale;
 }) {
     return (
         <li className="flex items-center gap-3 py-2.5 text-sm">
             <div className="min-w-0 flex-1">
-                <p className="truncate">{formatPlayedAt(play.created_at)}</p>
+                <p className="truncate">{formatPlayedAt(play.created_at, t, locale)}</p>
                 <p className="truncate text-xs text-muted">
-                    {play.provider ? providerLabel(play.provider) : 'Unbekannter Dienst'}
+                    {play.provider ? providerLabel(play.provider) : t('stats.unknownService')}
                     {' · '}
                     {songDurationMs
                         ? `${formatListenTime(play.listened_ms)} / ${formatListenTime(songDurationMs)}`
-                        : `${formatListenTime(play.listened_ms)} gehört`}
+                        : t('stats.heard', { time: formatListenTime(play.listened_ms) })}
                 </p>
             </div>
             {play.completed ? (
                 <span className="inline-flex items-center gap-1 text-xs text-accent">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    fertig
+                    {t('stats.finished')}
                 </span>
             ) : (
-                <span className="text-xs text-muted">teilweise</span>
+                <span className="text-xs text-muted">{t('stats.partial')}</span>
             )}
         </li>
     );

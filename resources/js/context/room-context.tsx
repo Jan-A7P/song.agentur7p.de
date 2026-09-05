@@ -13,9 +13,10 @@ import { getEcho } from '@/lib/echo';
 import { useAuth } from '@/context/auth-context';
 import { usePlayer } from '@/context/player-context';
 import type { ListeningRoom, RoomMessage, RoomPlaybackState, RoomQueueItem, RoomReaction } from '@/types';
+import { t } from '@/i18n';
 
 type PresenceUser = {
-    id: number;
+    id: string;
     name: string;
     role?: string;
 };
@@ -34,11 +35,11 @@ type RoomContextValue = {
     refresh: () => Promise<void>;
     sendPlayback: (action: string, payload?: Record<string, unknown>) => Promise<void>;
     addQueueSong: (payload: Record<string, unknown>) => Promise<void>;
-    removeQueueItem: (itemId: number) => Promise<void>;
-    voteQueueItem: (itemId: number) => Promise<void>;
+    removeQueueItem: (itemId: string) => Promise<void>;
+    voteQueueItem: (itemId: string) => Promise<void>;
     sendMessage: (body: string) => Promise<void>;
     sendReaction: (emoji: string) => Promise<void>;
-    setMemberRole: (userId: number, role: 'moderator' | 'member') => Promise<void>;
+    setMemberRole: (userId: string, role: 'moderator' | 'member') => Promise<void>;
 };
 
 const RoomContext = createContext<RoomContextValue | undefined>(undefined);
@@ -91,7 +92,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const pushReaction = useCallback(
-        (incoming: { id: number; emoji: string; created_at?: string; user: { id: number; name: string } }) => {
+        (incoming: { id: string; emoji: string; created_at?: string; user: { id: string; name: string } }) => {
             setReactions((prev) => {
                 const index = prev.findIndex((r) => r.emoji === incoming.emoji);
                 if (index === -1) {
@@ -226,7 +227,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                 return data.data;
             } catch (err: unknown) {
                 const axiosErr = err as { response?: { data?: { message?: string } } };
-                setError(axiosErr.response?.data?.message ?? 'Raum konnte nicht erstellt werden.');
+                setError(axiosErr.response?.data?.message ?? t('rooms.createFailed'));
                 throw err;
             } finally {
                 setLoading(false);
@@ -245,7 +246,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                 return data.data;
             } catch (err: unknown) {
                 const axiosErr = err as { response?: { data?: { message?: string } } };
-                setError(axiosErr.response?.data?.message ?? 'Beitritt fehlgeschlagen.');
+                setError(axiosErr.response?.data?.message ?? t('rooms.joinFailed'));
                 throw err;
             } finally {
                 setLoading(false);
@@ -313,7 +314,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
                 setRoom((prev) => (prev ? { ...prev, can_control: false } : prev));
                 setControlsLocked(true);
             }
-            setError(axiosErr.response?.data?.message ?? 'Wiedergabe-Sync fehlgeschlagen.');
+            setError(axiosErr.response?.data?.message ?? t('rooms.syncFailed'));
         }
     }, [applyState, setControlsLocked]);
 
@@ -332,7 +333,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     );
 
     const removeQueueItem = useCallback(
-        async (itemId: number) => {
+        async (itemId: string) => {
             const current = roomRef.current;
             if (!current) {
                 return;
@@ -344,7 +345,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         [applyState],
     );
 
-    const voteQueueItem = useCallback(async (itemId: number) => {
+    const voteQueueItem = useCallback(async (itemId: string) => {
         const current = roomRef.current;
         if (!current) {
             return;
@@ -369,7 +370,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
             }
             // Optimistic stack so the sender sees the count immediately
             pushReaction({
-                id: Date.now(),
+                id: crypto.randomUUID(),
                 emoji,
                 user: { id: user.id, name: user.name },
             });
@@ -383,7 +384,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     );
 
     const setMemberRole = useCallback(
-        async (userId: number, role: 'moderator' | 'member') => {
+        async (userId: string, role: 'moderator' | 'member') => {
             const current = roomRef.current;
             if (!current) {
                 return;
@@ -411,7 +412,9 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         });
 
         if (!room.state.is_playing || !room.state.track_uri || !ready) {
-            return;
+            return () => {
+                setOnTrackEnded(null);
+            };
         }
 
         const timer = window.setInterval(() => {

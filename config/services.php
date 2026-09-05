@@ -39,6 +39,13 @@ return [
         'client_id' => env('SPOTIFY_CLIENT_ID'),
         'client_secret' => env('SPOTIFY_CLIENT_SECRET'),
         'redirect' => env('SPOTIFY_REDIRECT_URI', env('APP_URL').'/music/spotify/callback'),
+        'login_redirect' => env('SPOTIFY_LOGIN_REDIRECT_URI', env('APP_URL').'/auth/spotify/callback'),
+    ],
+
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('GOOGLE_REDIRECT_URI', env('APP_URL').'/auth/google/callback'),
     ],
 
     'tidal' => [

@@ -3,13 +3,16 @@ import { Link, useNavigate } from 'react-router-dom';
 import { DoorOpen, Plus, Radio } from 'lucide-react';
 import api from '@/lib/api';
 import type { ListeningRoom } from '@/types';
+import { useI18n } from '@/context/locale-context';
 import { useRoom } from '@/context/room-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert } from '@/components/ui/alert';
+import { RoomListSkeleton } from '@/components/skeletons';
 
 export function RoomsIndexPage() {
     const navigate = useNavigate();
+    const { t } = useI18n();
     const { join, error: roomError } = useRoom();
     const [rooms, setRooms] = useState<ListeningRoom[]>([]);
     const [code, setCode] = useState('');
@@ -24,7 +27,7 @@ export function RoomsIndexPage() {
                 const { data } = await api.get<{ data: ListeningRoom[] }>('/rooms');
                 setRooms(data.data);
             } catch {
-                setError('Hörräume konnten nicht geladen werden.');
+                setError(t('rooms.loadFailed'));
             } finally {
                 setLoading(false);
             }
@@ -42,7 +45,7 @@ export function RoomsIndexPage() {
             const room = await join(code.trim());
             navigate(`/rooms/${room.code}`);
         } catch {
-            setError(roomError ?? 'Beitritt fehlgeschlagen.');
+            setError(roomError ?? t('rooms.joinFailed'));
         } finally {
             setJoining(false);
         }
@@ -52,15 +55,13 @@ export function RoomsIndexPage() {
         <div className="space-y-8">
             <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                    <h1 className="font-display text-4xl font-semibold tracking-tight">Hörräume</h1>
-                    <p className="mt-2 max-w-xl text-muted">
-                        Gemeinsam hören wie bei Spotify Jam — Host steuert, alle spielen synchron mit.
-                    </p>
+                    <h1 className="font-display text-4xl font-semibold tracking-tight">{t('rooms.title')}</h1>
+                    <p className="mt-2 max-w-xl text-muted">{t('rooms.subtitle')}</p>
                 </div>
                 <Button asChild variant="accent">
                     <Link to="/rooms/create">
                         <Plus className="h-4 w-4" />
-                        Raum erstellen
+                        {t('rooms.createRoom')}
                     </Link>
                 </Button>
             </div>
@@ -70,7 +71,7 @@ export function RoomsIndexPage() {
             <form onSubmit={onJoin} className="flex flex-wrap items-end gap-3 rounded-2xl border border-line bg-surface p-4">
                 <div className="min-w-[12rem] flex-1 space-y-2">
                     <label className="text-sm font-medium" htmlFor="room-code">
-                        Mit Code beitreten
+                        {t('rooms.joinWithCode')}
                     </label>
                     <Input
                         id="room-code"
@@ -83,18 +84,18 @@ export function RoomsIndexPage() {
                 </div>
                 <Button type="submit" disabled={joining || !code.trim()}>
                     <DoorOpen className="h-4 w-4" />
-                    {joining ? 'Beitreten…' : 'Beitreten'}
+                    {joining ? t('rooms.joining') : t('rooms.join')}
                 </Button>
             </form>
 
             <div>
-                <h2 className="mb-3 text-sm font-medium text-muted">Deine offenen Räume</h2>
+                <h2 className="mb-3 text-sm font-medium text-muted">{t('rooms.yourOpen')}</h2>
                 {loading ? (
-                    <p className="text-muted">Laden…</p>
+                    <RoomListSkeleton />
                 ) : rooms.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-line px-6 py-12 text-center">
                         <Radio className="mx-auto mb-3 h-8 w-8 text-muted" />
-                        <p className="text-muted">Noch kein aktiver Hörraum.</p>
+                        <p className="text-muted">{t('rooms.noneOpen')}</p>
                     </div>
                 ) : (
                     <ul className="divide-y divide-line border-y border-line">
@@ -111,9 +112,11 @@ export function RoomsIndexPage() {
                                     <div className="min-w-0 flex-1">
                                         <p className="truncate font-medium">{room.name}</p>
                                         <p className="truncate text-sm text-muted">
-                                            Code {room.code}
+                                            {t('rooms.code', { code: room.code })}
                                             {room.host ? ` · ${room.host.name}` : ''}
-                                            {typeof room.members_count === 'number' ? ` · ${room.members_count} Personen` : ''}
+                                            {typeof room.members_count === 'number'
+                                                ? t('common.peopleCount', { count: room.members_count })
+                                                : ''}
                                         </p>
                                     </div>
                                 </Link>

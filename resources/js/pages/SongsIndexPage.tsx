@@ -1,43 +1,43 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pause, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
 import api from '@/lib/api';
 import type { Paginated, Song } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { AppTooltip } from '@/components/ui/tooltip';
 import { FavoriteButton } from '@/components/FavoriteButton';
 import { useAuth } from '@/context/auth-context';
 import { usePlayer } from '@/context/player-context';
 import { hasMusicConnected, providerLabel } from '@/lib/music';
 import { Alert } from '@/components/ui/alert';
 import { songIsPlayable, songProviderLinks, songToPlayerTrack } from '@/lib/playable';
+import { getSongListCache, setSongListCache, subscribeSongListInvalidation, type SongListFilter } from '@/lib/song-list-cache';
+import { subscribeFavoriteChange } from '@/lib/favorite-sync';
+import { SongListSkeleton } from '@/components/skeletons';
+import { ArtistLinks } from '@/components/ArtistLinks';
+import { useI18n } from '@/context/locale-context';
 import { cn } from '@/lib/utils';
 
-type ListFilter = 'all' | 'favorites';
-
-function formatListenTime(ms: number): string {
-    if (!ms || ms < 1000) {
-        return '0 Min.';
-    }
-    const minutes = Math.round(ms / 60000);
-    if (minutes < 60) {
-        return `${minutes} Min.`;
-    }
-    const hours = Math.floor(minutes / 60);
-    const rest = minutes % 60;
-    return rest > 0 ? `${hours} Std. ${rest} Min.` : `${hours} Std.`;
-}
+type ListFilter = SongListFilter;
 
 export function SongsIndexPage() {
     const { user, refreshUser } = useAuth();
     const { track, playing, playTrack, toggle } = usePlayer();
-    const [songs, setSongs] = useState<Song[]>([]);
-    const [loading, setLoading] = useState(true);
+    const { t } = useI18n();
+    const initial = getSongListCache('all');
+    const [songs, setSongs] = useState<Song[]>(() => initial?.songs ?? []);
+    const [page, setPage] = useState(() => initial?.page ?? 1);
+    const [lastPage, setLastPage] = useState(() => initial?.lastPage ?? 1);
+    const [loading, setLoading] = useState(() => !(initial && initial.songs.length > 0));
     const [error, setError] = useState<string | null>(null);
     const [filter, setFilter] = useState<ListFilter>('all');
     const [oauthFlash, setOauthFlash] = useState<string | null>(() => {
         return new URLSearchParams(window.location.search).get('spotify');
     });
+
+    const hasPrev = page > 1;
+    const hasNext = page < lastPage;
 
     useEffect(() => {
         if (!oauthFlash) {
@@ -54,21 +54,24 @@ export function SongsIndexPage() {
         return () => window.clearTimeout(timer);
     }, [oauthFlash, refreshUser]);
 
-    const loadSongs = useCallback(
-        async (signal?: AbortSignal) => {
+    const loadPage = useCallback(
+        async (pageToLoad: number, signal?: AbortSignal) => {
             setLoading(true);
             setError(null);
+
             try {
+                const favorites = filter === 'favorites' ? 1 : undefined;
                 const { data } = await api.get<Paginated<Song>>('/songs', {
                     signal,
-                    params: {
-                        favorites: filter === 'favorites' ? 1 : undefined,
-                    },
+                    params: { page: pageToLoad, favorites },
                 });
+
                 setSongs(data.data);
+                setPage(data.current_page);
+                setLastPage(data.last_page);
             } catch {
                 if (!signal?.aborted) {
-                    setError('Songs konnten nicht geladen werden.');
+                    setError(t('songs.loadFailed'));
                 }
             } finally {
                 if (!signal?.aborted) {
@@ -80,16 +83,57 @@ export function SongsIndexPage() {
     );
 
     useEffect(() => {
+        const cached = getSongListCache(filter);
+        if (cached && cached.songs.length > 0) {
+            setSongs(cached.songs);
+            setPage(cached.page);
+            setLastPage(cached.lastPage);
+            setLoading(false);
+            setError(null);
+            return;
+        }
+
         const controller = new AbortController();
-        void loadSongs(controller.signal);
+        setSongs([]);
+        setPage(1);
+        setLastPage(1);
+        void loadPage(1, controller.signal);
         return () => controller.abort();
-    }, [loadSongs]);
+    }, [loadPage]);
+
+    useEffect(() => {
+        return subscribeSongListInvalidation(() => {
+            clearLocalAndReload();
+        });
+
+        function clearLocalAndReload() {
+            setSongs([]);
+            setPage(1);
+            setLastPage(1);
+            void loadPage(1);
+        }
+    }, [loadPage]);
+
+    useEffect(() => {
+        if (loading) {
+            return;
+        }
+        setSongListCache(filter, { songs, page, lastPage });
+    }, [songs, page, lastPage, filter, loading]);
 
     useEffect(() => {
         if (filter === 'favorites' && !user) {
             setFilter('all');
         }
     }, [filter, user]);
+
+    const goToPage = (nextPage: number) => {
+        if (nextPage < 1 || nextPage > lastPage || nextPage === page || loading) {
+            return;
+        }
+        window.scrollTo(0, 0);
+        void loadPage(nextPage);
+    };
 
     const onPlaySong = async (song: Song, e: React.MouseEvent) => {
         e.preventDefault();
@@ -120,7 +164,7 @@ export function SongsIndexPage() {
         await playTrack(playable);
     };
 
-    const onFavoriteChange = (songId: number, favorited: boolean) => {
+    const onFavoriteChange = (songId: string, favorited: boolean) => {
         setSongs((prev) => {
             if (filter === 'favorites' && !favorited) {
                 return prev.filter((s) => s.id !== songId);
@@ -129,12 +173,16 @@ export function SongsIndexPage() {
         });
     };
 
+    useEffect(() => {
+        return subscribeFavoriteChange(onFavoriteChange);
+    }, [filter]);
+
     return (
         <div className="space-y-8">
             <section className="space-y-2">
-                <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">Songs</h1>
+                <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">{t('songs.title')}</h1>
                 <p className="max-w-xl text-muted">
-                    Lyrics lesen und Tracks direkt abspielen. Suche mit{' '}
+                    {t('songs.subtitleBeforeShortcut')}{' '}
                     <kbd className="rounded border border-line bg-paper-2 px-1.5 py-0.5 text-xs">Ctrl+K</kbd>.
                 </p>
             </section>
@@ -149,7 +197,7 @@ export function SongsIndexPage() {
                             filter === 'all' ? 'bg-ink text-paper' : 'text-muted hover:text-ink',
                         )}
                     >
-                        Alle
+                        {t('common.all')}
                     </button>
                     <button
                         type="button"
@@ -159,104 +207,148 @@ export function SongsIndexPage() {
                             filter === 'favorites' ? 'bg-ink text-paper' : 'text-muted hover:text-ink',
                         )}
                     >
-                        Favoriten
+                        {t('songs.favorites')}
                     </button>
                 </div>
             )}
 
-            {oauthFlash === 'connected' && <Alert variant="success">Musikdienst erfolgreich verbunden.</Alert>}
-            {oauthFlash === 'error' && <Alert variant="error">Verbindung abgebrochen.</Alert>}
+            {oauthFlash === 'connected' && <Alert variant="success">{t('songs.connected')}</Alert>}
+            {oauthFlash === 'error' && <Alert variant="error">{t('songs.connectionAborted')}</Alert>}
 
             {error && <Alert variant="error">{error}</Alert>}
 
             {loading ? (
-                <p className="text-muted">Laden…</p>
+                <SongListSkeleton />
             ) : songs.length === 0 ? (
                 <p className="text-muted">
                     {filter === 'favorites'
-                        ? 'Noch keine Favoriten. Tippe auf das Herz bei einem Song.'
-                        : 'Noch keine Songs. Sei der Erste und füge einen hinzu.'}
+                        ? t('songs.noFavorites')
+                        : t('songs.noSongs')}
                 </p>
             ) : (
-                <ul className="divide-y divide-line border-y border-line">
-                    {songs.map((song) => {
-                        const playable = songIsPlayable(song);
-                        const links = songProviderLinks(song);
-                        const preferred = song.preferred_provider ?? song.provider;
-                        const isCurrent = Boolean(
-                            track?.songId === song.id || links.some((l) => l.provider_uri === track?.uri),
-                        );
-                        const isPlayingHere = isCurrent && playing;
-                        const playCount = song.play_count ?? 0;
+                <>
+                    <ul className="divide-y divide-line border-y border-line">
+                        {songs.map((song) => {
+                            const playable = songIsPlayable(song);
+                            const links = songProviderLinks(song);
+                            const preferred = song.preferred_provider ?? song.provider;
+                            const isCurrent = Boolean(
+                                track?.songId === song.id || links.some((l) => l.provider_uri === track?.uri),
+                            );
+                            const isPlayingHere = isCurrent && playing;
 
-                        return (
-                            <li key={song.id}>
-                                <div className="group -mx-3 flex items-center gap-3 rounded-lg px-3 py-4 transition hover:bg-surface sm:gap-4">
-                                    <Link to={`/songs/${song.id}`} className="flex min-w-0 flex-1 items-center gap-4">
-                                        {song.album_art_url ? (
-                                            <img
-                                                src={song.album_art_url}
-                                                alt=""
-                                                className="h-14 w-14 rounded object-cover"
-                                            />
-                                        ) : (
-                                            <div className="flex h-14 w-14 items-center justify-center rounded bg-paper-2 text-xs text-muted">
-                                                —
-                                            </div>
+                            return (
+                                <li key={song.id}>
+                                    <div
+                                        className={cn(
+                                            'group -mx-3 flex items-center gap-3 rounded-lg px-3 py-4 transition sm:gap-4',
+                                            isCurrent
+                                                ? 'bg-accent/10 ring-1 ring-accent/25 hover:bg-accent/15'
+                                                : 'hover:bg-surface',
                                         )}
-                                        <div className="min-w-0 flex-1">
-                                            <p className="truncate font-medium group-hover:text-accent">{song.title}</p>
-                                            <p className="truncate text-sm text-muted">{song.artist}</p>
-                                            {playCount > 0 && (
-                                                <p className="mt-0.5 truncate text-xs text-muted/80">
-                                                    {playCount}× gespielt
-                                                    {(song.total_listen_ms ?? 0) > 0
-                                                        ? ` · ${formatListenTime(song.total_listen_ms ?? 0)}`
-                                                        : ''}
-                                                </p>
+                                    >
+                                        <Link to={`/songs/${song.id}`} className="shrink-0">
+                                            {song.album_art_url ? (
+                                                <img
+                                                    src={song.album_art_url}
+                                                    alt=""
+                                                    className="h-14 w-14 rounded object-cover"
+                                                />
+                                            ) : (
+                                                <div className="flex h-14 w-14 items-center justify-center rounded bg-paper-2 text-xs text-muted">
+                                                    {t('common.dash')}
+                                                </div>
                                             )}
-                                        </div>
-                                    </Link>
-                                    <FavoriteButton
-                                        songId={song.id}
-                                        favorited={Boolean(song.is_favorited)}
-                                        onChange={(favorited) => onFavoriteChange(song.id, favorited)}
-                                    />
-                                    {playable && (
-                                        <>
-                                            <div className="hidden flex-wrap justify-end gap-1 sm:flex">
-                                                {links.map((link) => (
-                                                    <Badge
-                                                        key={link.provider}
-                                                        className={cn(
-                                                            link.provider === preferred &&
-                                                                'border-accent/20 bg-accent/10 text-accent',
-                                                        )}
-                                                    >
-                                                        {providerLabel(link.provider)}
-                                                    </Badge>
-                                                ))}
-                                            </div>
-                                            <Button
-                                                type="button"
-                                                variant="accent"
-                                                size="icon"
-                                                aria-label={isPlayingHere ? 'Pause' : 'Abspielen'}
-                                                onClick={(e) => void onPlaySong(song, e)}
-                                            >
-                                                {isPlayingHere ? (
-                                                    <Pause className="h-4 w-4" />
-                                                ) : (
-                                                    <Play className="h-4 w-4" />
+                                        </Link>
+                                        <div className="min-w-0 flex-1">
+                                            <Link
+                                                to={`/songs/${song.id}`}
+                                                className={cn(
+                                                    'block truncate font-medium hover:text-accent',
+                                                    isCurrent && 'text-accent',
                                                 )}
-                                            </Button>
-                                        </>
-                                    )}
-                                </div>
-                            </li>
-                        );
-                    })}
-                </ul>
+                                            >
+                                                {song.title}
+                                            </Link>
+                                            <p className="truncate text-sm text-muted">
+                                                <ArtistLinks artists={song.artists} artist={song.artist} />
+                                            </p>
+                                        </div>
+                                        <FavoriteButton
+                                            songId={song.id}
+                                            favorited={Boolean(song.is_favorited)}
+                                            onChange={(favorited) => onFavoriteChange(song.id, favorited)}
+                                        />
+                                        {playable && (
+                                            <>
+                                                <div className="hidden flex-wrap justify-end gap-1 sm:flex">
+                                                    {links.map((link) => (
+                                                        <Badge
+                                                            key={link.provider}
+                                                            className={cn(
+                                                                link.provider === preferred &&
+                                                                    'border-accent/20 bg-accent/10 text-accent',
+                                                            )}
+                                                        >
+                                                            {providerLabel(link.provider)}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                                <AppTooltip label={isPlayingHere ? t('common.pause') : t('common.play')}>
+                                                    <Button
+                                                        type="button"
+                                                        variant="accent"
+                                                        size="icon"
+                                                        aria-label={isPlayingHere ? t('common.pause') : t('common.play')}
+                                                        onClick={(e) => void onPlaySong(song, e)}
+                                                    >
+                                                        {isPlayingHere ? (
+                                                            <Pause className="h-4 w-4" />
+                                                        ) : (
+                                                            <Play className="h-4 w-4" />
+                                                        )}
+                                                    </Button>
+                                                </AppTooltip>
+                                            </>
+                                        )}
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ul>
+
+                    {lastPage > 1 && (
+                        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                            <AppTooltip label={t('common.previousPage')}>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    disabled={!hasPrev || loading}
+                                    aria-label={t('common.previousPage')}
+                                    onClick={() => goToPage(page - 1)}
+                                >
+                                    <ChevronLeft className="h-4 w-4" />
+                                </Button>
+                            </AppTooltip>
+                            <p className="min-w-[7rem] text-center text-sm text-muted">
+                                {t('common.pageOf', { page, lastPage })}
+                            </p>
+                            <AppTooltip label={t('common.nextPage')}>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    disabled={!hasNext || loading}
+                                    aria-label={t('common.nextPage')}
+                                    onClick={() => goToPage(page + 1)}
+                                >
+                                    <ChevronRight className="h-4 w-4" />
+                                </Button>
+                            </AppTooltip>
+                        </div>
+                    )}
+                </>
             )}
         </div>
     );

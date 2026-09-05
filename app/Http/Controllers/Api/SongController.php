@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Song;
 use App\Models\SongPlay;
 use App\Models\User;
+use App\Services\ArtistService;
 use App\Services\SongCatalogService;
 use App\Services\SongPlayTrackingService;
 use Illuminate\Database\Eloquent\Builder;
@@ -18,6 +19,7 @@ class SongController extends Controller
 {
     public function __construct(
         private SongCatalogService $catalog,
+        private ArtistService $artists,
         private SongPlayTrackingService $playTracking,
     ) {}
 
@@ -26,7 +28,7 @@ class SongController extends Controller
         $user = $request->user();
 
         $query = Song::query()
-            ->with(['user:id,name', 'providers'])
+            ->with(['providers', 'artists'])
             ->latest();
 
         $this->applyFavoriteExists($query, $user);
@@ -35,7 +37,10 @@ class SongController extends Controller
             $query->where(function ($builder) use ($search) {
                 $builder
                     ->where('title', 'like', "%{$search}%")
-                    ->orWhere('artist', 'like', "%{$search}%");
+                    ->orWhere('artist', 'like', "%{$search}%")
+                    ->orWhereHas('artists', function (Builder $artists) use ($search) {
+                        $artists->where('name', 'like', "%{$search}%");
+                    });
             });
         }
 
@@ -61,7 +66,7 @@ class SongController extends Controller
         $validated['lyrics'] = $validated['lyrics'] ?? '';
 
         $result = $this->catalog->createOrMerge($request->user(), $validated);
-        $song = $this->decorateSong($result['song']->load(['user:id,name', 'providers']), $request->user());
+        $song = $this->decorateSong($result['song']->load(['providers', 'artists']), $request->user());
 
         return response()->json([
             'data' => $song,
@@ -72,8 +77,13 @@ class SongController extends Controller
 
     public function show(Request $request, Song $song): JsonResponse
     {
-        $song->load(['user:id,name', 'providers']);
+        $song->load(['providers', 'artists']);
         $user = $request->user();
+
+        if (! $song->duration_ms || $song->duration_ms <= 0) {
+            $song = $this->catalog->fillMissingDuration($song);
+            $song->load(['providers', 'artists']);
+        }
 
         $completedCount = $song->plays()->where('completed', true)->count();
 
@@ -126,17 +136,22 @@ class SongController extends Controller
 
     public function update(Request $request, Song $song): JsonResponse
     {
-        $this->authorizeSong($request, $song);
-
         $validated = $this->validateSong($request);
         $validated['lyrics'] = $validated['lyrics'] ?? '';
 
-        $song->update([
+        $payload = [
             'title' => $validated['title'],
             'artist' => $validated['artist'],
             'lyrics' => $validated['lyrics'],
             'album_art_url' => $validated['album_art_url'] ?? $song->album_art_url,
-        ]);
+        ];
+
+        if ((! $song->duration_ms || $song->duration_ms <= 0) && ! empty($validated['duration_ms'])) {
+            $payload['duration_ms'] = (int) $validated['duration_ms'];
+        }
+
+        $song->update($payload);
+        $this->artists->syncSongArtists($song->fresh(), $validated['artist']);
 
         if (array_key_exists('providers', $validated)) {
             $this->catalog->syncProviderLinks(
@@ -149,7 +164,7 @@ class SongController extends Controller
         }
 
         return response()->json([
-            'data' => $this->decorateSong($song->fresh()->load(['user:id,name', 'providers']), $request->user()),
+            'data' => $this->decorateSong($song->fresh()->load(['providers', 'artists']), $request->user()),
         ]);
     }
 
@@ -170,9 +185,13 @@ class SongController extends Controller
                 'uri' => $validated['provider_uri'],
                 'album_art_url' => $validated['album_art_url'] ?? null,
             ]);
-            $song = $song->fresh()->load(['user:id,name', 'providers']);
+            $song = $song->fresh()->load(['providers']);
         } else {
             $song = $this->catalog->markLastWorking($song, $validated['provider']);
+        }
+
+        if ((! $song->duration_ms || $song->duration_ms <= 0) && empty($validated['duration_ms'])) {
+            $song = $this->catalog->fillMissingDuration($song);
         }
 
         $play = null;
@@ -181,7 +200,7 @@ class SongController extends Controller
                 'provider' => $validated['provider'],
                 'duration_ms' => $validated['duration_ms'] ?? null,
             ]);
-            $song = $song->fresh()->load(['user:id,name', 'providers']);
+            $song = $song->fresh()->load(['providers']);
         }
 
         return response()->json([
@@ -222,7 +241,7 @@ class SongController extends Controller
                 'duration_ms' => $play->duration_ms,
                 'completed' => $play->completed,
             ],
-            'data' => $this->decorateSong($song->fresh()->load(['user:id,name', 'providers']), $request->user()),
+            'data' => $this->decorateSong($song->fresh()->load(['providers']), $request->user()),
         ]);
     }
 
@@ -231,7 +250,7 @@ class SongController extends Controller
         $request->user()->favoriteSongs()->syncWithoutDetaching([$song->id]);
 
         return response()->json([
-            'data' => $this->decorateSong($song->fresh()->load(['user:id,name', 'providers']), $request->user()),
+            'data' => $this->decorateSong($song->fresh()->load(['providers']), $request->user()),
         ]);
     }
 
@@ -240,13 +259,12 @@ class SongController extends Controller
         $request->user()->favoriteSongs()->detach($song->id);
 
         return response()->json([
-            'data' => $this->decorateSong($song->fresh()->load(['user:id,name', 'providers']), $request->user()),
+            'data' => $this->decorateSong($song->fresh()->load(['providers']), $request->user()),
         ]);
     }
 
     public function destroy(Request $request, Song $song): JsonResponse
     {
-        $this->authorizeSong($request, $song);
         $song->delete();
 
         return response()->json(null, 204);
@@ -266,17 +284,13 @@ class SongController extends Controller
             'provider_track_id' => ['nullable', 'string', 'max:255'],
             'provider_uri' => ['nullable', 'string', 'max:255'],
             'album_art_url' => ['nullable', 'string', 'max:2048'],
+            'duration_ms' => ['nullable', 'integer', 'min:1', 'max:3600000'],
             'providers' => ['nullable', 'array'],
             'providers.*.provider' => ['required_with:providers', 'string', 'max:32'],
             'providers.*.provider_track_id' => ['required_with:providers', 'string', 'max:255'],
             'providers.*.provider_uri' => ['required_with:providers', 'string', 'max:255'],
             'providers.*.album_art_url' => ['nullable', 'string', 'max:2048'],
         ]);
-    }
-
-    private function authorizeSong(Request $request, Song $song): void
-    {
-        abort_unless($song->user_id === $request->user()->id, 403, 'Nicht berechtigt.');
     }
 
     /**

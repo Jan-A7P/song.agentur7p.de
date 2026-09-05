@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useI18n } from '@/context/locale-context';
 import { useRoom } from '@/context/room-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,12 +9,13 @@ import { Alert } from '@/components/ui/alert';
 
 export function RoomCreatePage() {
     const navigate = useNavigate();
+    const { t } = useI18n();
     const { create, loading, error } = useRoom();
     const [name, setName] = useState('');
 
     const onSubmit = async (event: FormEvent) => {
         event.preventDefault();
-        const room = await create(name.trim() || 'Hörraum');
+        const room = await create(name.trim() || t('rooms.defaultName'));
         navigate(`/rooms/${room.code}`);
     };
 
@@ -22,29 +24,29 @@ export function RoomCreatePage() {
             <div>
                 <p className="text-sm text-muted">
                     <Link to="/rooms" className="hover:text-accent">
-                        ← Hörräume
+                        {t('rooms.back')}
                     </Link>
                 </p>
-                <h1 className="font-display text-3xl font-semibold tracking-tight">Hörraum erstellen</h1>
-                <p className="mt-2 text-muted">Andere treten per Code oder Link bei. Du steuerst die Musik.</p>
+                <h1 className="font-display text-3xl font-semibold tracking-tight">{t('rooms.createTitle')}</h1>
+                <p className="mt-2 text-muted">{t('rooms.createSubtitle')}</p>
             </div>
 
             {error && <Alert variant="error">{error}</Alert>}
 
             <form onSubmit={onSubmit} className="space-y-4 rounded-2xl border border-line bg-surface p-5">
                 <div className="space-y-2">
-                    <Label htmlFor="name">Name</Label>
+                    <Label htmlFor="name">{t('rooms.name')}</Label>
                     <Input
                         id="name"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
-                        placeholder="Freitagabend Jam"
+                        placeholder={t('rooms.namePlaceholder')}
                         required
                         maxLength={120}
                     />
                 </div>
                 <Button type="submit" variant="accent" disabled={loading}>
-                    {loading ? 'Erstellen…' : 'Raum starten'}
+                    {loading ? t('rooms.creating') : t('rooms.start')}
                 </Button>
             </form>
         </div>

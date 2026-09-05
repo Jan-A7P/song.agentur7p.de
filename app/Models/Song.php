@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -26,7 +28,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 ])]
 class Song extends Model
 {
-    protected $with = ['providers'];
+    use HasUuids;
+
+    protected $with = ['providers', 'artists'];
 
     /**
      * @return array<string, string>
@@ -49,13 +53,16 @@ class Song extends Model
     public function playlists(): BelongsToMany
     {
         return $this->belongsToMany(Playlist::class)
+            ->using(PlaylistSong::class)
             ->withPivot(['id', 'position'])
             ->withTimestamps();
     }
 
     public function favoritedBy(): BelongsToMany
     {
-        return $this->belongsToMany(User::class, 'song_favorites')->withTimestamps();
+        return $this->belongsToMany(User::class, 'song_favorites')
+            ->using(SongFavorite::class)
+            ->withTimestamps();
     }
 
     public function plays(): HasMany
@@ -66,6 +73,38 @@ class Song extends Model
     public function providers(): HasMany
     {
         return $this->hasMany(SongProvider::class)->orderBy('provider');
+    }
+
+    public function artists(): BelongsToMany
+    {
+        return $this->belongsToMany(Artist::class)
+            ->using(ArtistSong::class)
+            ->withPivot(['id', 'position'])
+            ->withTimestamps()
+            ->orderByPivot('position');
+    }
+
+    public function discoverySwipes(): HasMany
+    {
+        return $this->hasMany(DiscoverySwipe::class);
+    }
+
+    /**
+     * @param  Builder<Song>  $query
+     * @return Builder<Song>
+     */
+    public function scopePlayable(Builder $query): Builder
+    {
+        return $query->where(function (Builder $builder) {
+            $builder
+                ->whereHas('providers')
+                ->orWhere(function (Builder $legacy) {
+                    $legacy
+                        ->whereNotNull('provider')
+                        ->whereNotNull('provider_uri')
+                        ->where('provider_uri', '!=', '');
+                });
+        });
     }
 
     public function isPlayable(): bool

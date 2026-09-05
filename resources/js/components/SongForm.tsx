@@ -22,11 +22,14 @@ import { songProviderLinks } from '@/lib/playable';
 import type { MusicProviderId } from '@/music/types';
 import type { ProviderTrack, Song, SongProviderLink } from '@/types';
 import { cn } from '@/lib/utils';
+import { AppTooltip } from '@/components/ui/tooltip';
+import { useI18n } from '@/context/locale-context';
 
 export type SongFormValues = {
     title: string;
     artist: string;
     lyrics: string;
+    duration_ms: number | null;
     provider: string | null;
     preferred_provider: string | null;
     provider_track_id: string | null;
@@ -56,6 +59,7 @@ function initialLinks(initial?: Partial<Song>): SongProviderLink[] {
 
 export function SongForm({ initial, submitLabel, onSubmit }: Props) {
     const { user } = useAuth();
+    const { t } = useI18n();
     const { track: playerTrack, playing, positionMs, playTrack, toggle } = usePlayer();
     const [title, setTitle] = useState(initial?.title ?? '');
     const [artist, setArtist] = useState(initial?.artist ?? '');
@@ -69,6 +73,9 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
             (initial?.preferred_provider as MusicProviderId | null | undefined) ??
             initialLinks(initial)[0]?.provider ??
             null,
+    );
+    const [durationMs, setDurationMs] = useState<number | null>(() =>
+        initial?.duration_ms && initial.duration_ms > 0 ? initial.duration_ms : null,
     );
     const [error, setError] = useState<string | null>(null);
     const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
@@ -116,11 +123,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
             setLines(lyricsToEditableLines(nextLyrics));
             setActiveLine(0);
         }
-        setLyricsStatus(
-            synced
-                ? 'Synchronisierter Songtext von LRCLIB eingefügt.'
-                : 'Songtext von LRCLIB eingefügt.',
-        );
+        setLyricsStatus(synced ? t('form.lyricsSynced') : t('form.lyricsPlain'));
     };
 
     const fetchLyrics = async (options?: {
@@ -133,7 +136,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         const lookupArtist = (options?.artist ?? artistRef.current).trim();
 
         if (!lookupTitle || !lookupArtist) {
-            setError('Titel und Artist werden für die Songtext-Suche benötigt.');
+            setError(t('form.needTitleArtist'));
             return;
         }
 
@@ -143,7 +146,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         }
 
         if (currentLyrics && options?.force) {
-            const confirmed = window.confirm('Vorhandenen Songtext mit dem gefundenen Text überschreiben?');
+            const confirmed = window.confirm(t('form.overwriteLyrics'));
             if (!confirmed) {
                 return;
             }
@@ -163,7 +166,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
             });
             applyFetchedLyrics(data.lyrics, data.synced);
         } catch (err) {
-            let message = 'Kein Songtext gefunden.';
+            let message = t('form.noLyricsFound');
             if (axios.isAxiosError(err)) {
                 message = (err.response?.data as { message?: string } | undefined)?.message ?? message;
             }
@@ -198,7 +201,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
 
     const ensurePlaying = async () => {
         if (!preferredLink) {
-            setError('Bitte zuerst einen Track verknüpfen.');
+            setError(t('form.linkTrackFirst'));
             return;
         }
 
@@ -222,7 +225,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
             albumArtUrl: preferredLink.album_art_url ?? null,
             songId: initial?.id,
             lyrics: timingMode ? serializeEditableLines(lines) : lyrics,
-        });
+        }, { radio: false });
     };
 
     const handleSubmit = async (e: FormEvent) => {
@@ -236,6 +239,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                 title,
                 artist,
                 lyrics: finalLyrics,
+                duration_ms: durationMs,
                 provider: preferred?.provider ?? null,
                 preferred_provider: preferred?.provider ?? null,
                 provider_track_id: preferred?.provider_track_id ?? null,
@@ -244,7 +248,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                 providers: links,
             });
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.');
+            setError(err instanceof Error ? err.message : t('songs.saveFailed'));
         } finally {
             setSubmitting(false);
         }
@@ -256,9 +260,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         }
 
         if (!activeProviders.includes(next.provider)) {
-            setError(
-                `${providerLabel(next.provider)} ist nicht aktiv. Bitte den Dienst in den Einstellungen aktivieren.`,
-            );
+            setError(t('form.providerInactive', { provider: providerLabel(next.provider) }));
             return;
         }
 
@@ -275,6 +277,10 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         });
         setPreferredProvider((prev) => prev ?? next.provider);
 
+        if (next.duration_ms && next.duration_ms > 0) {
+            setDurationMs((prev) => prev ?? next.duration_ms ?? null);
+        }
+
         const nextTitle = titleRef.current || next.name;
         const nextArtist = artistRef.current || next.artist;
         if (!titleRef.current) {
@@ -287,7 +293,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         void fetchLyrics({
             title: nextTitle,
             artist: nextArtist,
-            durationMs: next.duration_ms,
+            durationMs: next.duration_ms ?? durationMs,
             force: false,
         });
     };
@@ -309,30 +315,42 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         <form onSubmit={handleSubmit} className="space-y-5">
             {error && <Alert variant="error">{error}</Alert>}
             {lyricsStatus && !error && (
-                <Alert variant={lyricsStatus.includes('eingefügt') ? 'success' : 'default'}>{lyricsStatus}</Alert>
+                <Alert
+                    variant={
+                        lyricsStatus === t('form.lyricsSynced') || lyricsStatus === t('form.lyricsPlain')
+                            ? 'success'
+                            : 'default'
+                    }
+                >
+                    {lyricsStatus}
+                </Alert>
             )}
 
             <div className="space-y-2">
-                <Label htmlFor="title">Titel</Label>
+                <Label htmlFor="title">{t('form.title')}</Label>
                 <Input id="title" required value={title} onChange={(e) => setTitle(e.target.value)} />
             </div>
 
             <div className="space-y-2">
-                <Label htmlFor="artist">Artist</Label>
-                <Input id="artist" required value={artist} onChange={(e) => setArtist(e.target.value)} />
+                <Label htmlFor="artist">{t('form.artist')}</Label>
+                <Input
+                    id="artist"
+                    required
+                    value={artist}
+                    onChange={(e) => setArtist(e.target.value)}
+                    placeholder={t('form.artistPlaceholder')}
+                />
+                <p className="text-xs text-muted">{t('form.artistHint')}</p>
             </div>
 
             <div className="space-y-2">
-                <Label>Tracks verknüpfen (optional)</Label>
-                <p className="text-xs text-muted">
-                    Pro aktivem Musikdienst einen Track hinterlegen und festlegen, welcher bevorzugt
-                    abgespielt wird. Inaktive Dienste erscheinen nicht in der Suche.
-                </p>
+                <Label>{t('form.linkTracks')}</Label>
+                <p className="text-xs text-muted">{t('form.linkTracksHint')}</p>
 
                 {links.length > 0 && (
                     <div
                         role="radiogroup"
-                        aria-label="Bevorzugter Musikdienst"
+                        aria-label={t('form.preferredService')}
                         className="space-y-2"
                     >
                         {links.map((link) => {
@@ -370,11 +388,11 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                                             </span>
                                             {isPreferred && (
                                                 <Badge className="border-accent/20 bg-accent/10 text-accent">
-                                                    Bevorzugt
+                                                    {t('common.preferred')}
                                                 </Badge>
                                             )}
                                             {!isActive && (
-                                                <Badge>Inaktiv</Badge>
+                                                <Badge>{t('common.inactive')}</Badge>
                                             )}
                                         </div>
                                         <p className="mt-0.5 truncate text-xs text-muted">
@@ -387,7 +405,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                                         id={preferId}
                                         role="radio"
                                         aria-checked={isPreferred}
-                                        aria-label={`${providerLabel(link.provider)} als bevorzugt setzen`}
+                                        aria-label={t('form.setPreferred', { provider: providerLabel(link.provider) })}
                                         onClick={() => setPreferredProvider(link.provider)}
                                         className={cn(
                                             'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium transition',
@@ -404,19 +422,21 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                                             )}
                                             aria-hidden
                                         />
-                                        {isPreferred ? 'Bevorzugt' : 'Bevorzugen'}
+                                        {isPreferred ? t('common.preferred') : t('form.prefer')}
                                     </button>
 
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-8 w-8 shrink-0"
-                                        aria-label={`${providerLabel(link.provider)} entfernen`}
-                                        onClick={() => removeLink(link.provider)}
-                                    >
-                                        <X className="h-4 w-4" />
-                                    </Button>
+                                    <AppTooltip label={t('form.removeProvider', { provider: providerLabel(link.provider) })}>
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-8 w-8 shrink-0"
+                                            aria-label={t('form.removeProvider', { provider: providerLabel(link.provider) })}
+                                            onClick={() => removeLink(link.provider)}
+                                        >
+                                            <X className="h-4 w-4" />
+                                        </Button>
+                                    </AppTooltip>
                                 </div>
                             );
                         })}
@@ -431,17 +451,16 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                     />
                 ) : (
                     <p className="rounded-xl border border-dashed border-line bg-surface/60 px-3 py-3 text-xs text-muted">
-                        Kein aktiver Musikdienst. Bitte in den Einstellungen einen Dienst verbinden und
-                        aktivieren.
+                        {t('form.noActiveService')}
                     </p>
                 )}
             </div>
 
             <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Label htmlFor="lyrics">Songtext</Label>
+                    <Label htmlFor="lyrics">{t('form.lyrics')}</Label>
                     <div className="flex flex-wrap items-center gap-2">
-                        {isLrc && <Badge className="border-accent/20 bg-accent/10 text-accent">LRC erkannt</Badge>}
+                        {isLrc && <Badge className="border-accent/20 bg-accent/10 text-accent">{t('form.lrcDetected')}</Badge>}
                         <Button
                             type="button"
                             size="sm"
@@ -459,15 +478,15 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                             ) : (
                                 <Download className="h-4 w-4" />
                             )}
-                            Songtext holen
+                            {t('form.fetchLyrics')}
                         </Button>
                         {!timingMode ? (
                             <Button type="button" size="sm" variant="outline" onClick={enterTimingMode}>
-                                Zeitstempel setzen
+                                {t('form.setTimestamps')}
                             </Button>
                         ) : (
                             <Button type="button" size="sm" variant="outline" onClick={exitTimingMode}>
-                                Zur Textansicht
+                                {t('form.textView')}
                             </Button>
                         )}
                     </div>
@@ -483,26 +502,26 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                             placeholder={'[00:12.00] Erste Zeile\n[00:17.50] Zweite Zeile\n[00:22.00] Dritte Zeile'}
                         />
                         <p className="text-xs text-muted">
-                            Automatisch über LRCLIB, manuell oder mit „Zeitstempel setzen“ während der Wiedergabe.
+                            {t('form.lyricsHint')}
                         </p>
                     </>
                 ) : (
                     <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                             <div>
-                                <p className="text-sm font-medium">Timing-Modus</p>
+                                <p className="text-sm font-medium">{t('form.timingMode')}</p>
                                 <p className="text-xs text-muted">
-                                    Song abspielen und pro Zeile „Zeit setzen“ drücken ({formatTimePrecise(positionMs)}).
+                                    {t('form.timingHint', { time: formatTimePrecise(positionMs) })}
                                 </p>
                             </div>
                             <Button type="button" size="sm" variant="accent" onClick={() => void ensurePlaying()}>
                                 {playerTrack?.uri === preferredLink?.provider_uri && playing ? (
                                     <>
-                                        <Pause className="h-4 w-4" /> Pause
+                                        <Pause className="h-4 w-4" /> {t('common.pause')}
                                     </>
                                 ) : (
                                     <>
-                                        <Play className="h-4 w-4" /> Abspielen
+                                        <Play className="h-4 w-4" /> {t('common.play')}
                                     </>
                                 )}
                             </Button>
@@ -539,21 +558,23 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                                             }}
                                             onFocus={() => setActiveLine(index)}
                                             className="flex-1"
-                                            placeholder={`Zeile ${index + 1}`}
+                                            placeholder={t('form.line', { n: index + 1 })}
                                         />
-                                        <Button
-                                            type="button"
-                                            size="sm"
-                                            variant={activeLine === index ? 'accent' : 'outline'}
-                                            onClick={() => {
-                                                setActiveLine(index);
-                                                stampLine(index);
-                                            }}
-                                            title="Aktuelle Player-Zeit setzen"
-                                        >
-                                            <TimerReset className="h-4 w-4" />
-                                            Zeit
-                                        </Button>
+                                        <AppTooltip label={t('form.setTime')}>
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant={activeLine === index ? 'accent' : 'outline'}
+                                                onClick={() => {
+                                                    setActiveLine(index);
+                                                    stampLine(index);
+                                                }}
+                                                aria-label={t('form.setTime')}
+                                            >
+                                                <TimerReset className="h-4 w-4" />
+                                                {t('form.time')}
+                                            </Button>
+                                        </AppTooltip>
                                     </li>
                                 );
                             })}
@@ -566,13 +587,13 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                                 variant="outline"
                                 onClick={() => {
                                     setLines((prev) => {
-                                        const next = [...prev, { timeMs: null, text: 'Neue Zeile' }];
+                                        const next = [...prev, { timeMs: null, text: t('form.newLine') }];
                                         setActiveLine(next.length - 1);
                                         return next;
                                     });
                                 }}
                             >
-                                Zeile hinzufügen
+                                {t('form.addLine')}
                             </Button>
                             <Button
                                 type="button"
@@ -582,7 +603,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                                     setLines((prev) => prev.map((line) => ({ ...line, timeMs: null })))
                                 }
                             >
-                                Zeiten löschen
+                                {t('form.clearTimes')}
                             </Button>
                         </div>
                     </div>
@@ -590,7 +611,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
             </div>
 
             <Button type="submit" variant="accent" disabled={submitting}>
-                {submitting ? 'Speichern…' : submitLabel}
+                {submitting ? t('common.saving') : submitLabel}
             </Button>
         </form>
     );

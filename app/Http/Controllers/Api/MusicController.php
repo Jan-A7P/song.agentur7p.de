@@ -4,7 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\MusicProvider;
 use App\Http\Controllers\Controller;
+use App\Models\Playlist;
+use App\Models\Song;
 use App\Music\MusicProviderRegistry;
+use App\Services\LyricsLookupService;
 use App\Services\MusicConnectionService;
 use App\Services\SongCatalogService;
 use Illuminate\Http\JsonResponse;
@@ -19,6 +22,7 @@ class MusicController extends Controller
         private MusicProviderRegistry $registry,
         private MusicConnectionService $connections,
         private SongCatalogService $catalog,
+        private LyricsLookupService $lyrics,
     ) {}
 
     public function providers(): JsonResponse
@@ -236,12 +240,13 @@ class MusicController extends Controller
 
         if (count($tracks) === 0) {
             return response()->json([
-                'message' => 'Keine importierbaren Tracks.',
+                'message' => __('No importable tracks.'),
             ], 422);
         }
 
         try {
-            $playlist = DB::transaction(function () use ($user, $meta, $tracks, $adapter) {
+            /** @var array{0: Playlist, 1: list<array{song_id: string, duration_ms: int|null}>} $imported */
+            $imported = DB::transaction(function () use ($user, $meta, $tracks, $adapter) {
                 $playlist = $user->playlists()->create([
                     'name' => $meta['name'] ?: ($adapter->label().' Playlist'),
                     'description' => $meta['description'] ?? null,
@@ -249,12 +254,16 @@ class MusicController extends Controller
 
                 $attach = [];
                 $position = 1;
+                /** @var list<array{song_id: string, duration_ms: int|null}> $pendingLyrics */
+                $pendingLyrics = [];
 
                 foreach ($tracks as $track) {
+                    $durationMs = isset($track['duration_ms']) ? (int) $track['duration_ms'] : null;
                     $result = $this->catalog->createOrMerge($user, [
                         'title' => mb_substr($track['name'], 0, 255),
                         'artist' => mb_substr($track['artist'], 0, 255),
                         'lyrics' => '',
+                        'duration_ms' => $durationMs && $durationMs > 0 ? $durationMs : null,
                         'provider' => $adapter->id(),
                         'provider_track_id' => $track['id'],
                         'provider_uri' => $track['uri'],
@@ -265,32 +274,74 @@ class MusicController extends Controller
                     if (! isset($attach[$song->id])) {
                         $attach[$song->id] = ['position' => $position];
                         $position++;
+                        $pendingLyrics[] = [
+                            'song_id' => $song->id,
+                            'duration_ms' => $song->duration_ms ?: ($durationMs && $durationMs > 0 ? $durationMs : null),
+                        ];
                     }
                 }
 
                 if ($attach === []) {
-                    throw new \RuntimeException('Keine Songs zum Anhängen gefunden.');
+                    throw new \RuntimeException(__('No songs to attach.'));
                 }
 
                 $playlist->songs()->attach($attach);
 
-                return $playlist;
+                return [$playlist, $pendingLyrics];
             });
         } catch (Throwable $e) {
             return response()->json([
-                'message' => 'Import fehlgeschlagen: '.$e->getMessage(),
+                'message' => __('Import failed: :message', ['message' => $e->getMessage()]),
             ], 500);
         }
 
+        [$playlist, $pendingLyrics] = $imported;
+        $lyricsFound = $this->enrichImportedLyrics($pendingLyrics);
+
         $playlist->load([
             'user:id,name',
-            'songs' => fn ($query) => $query->with('user:id,name'),
+            'songs' => fn ($query) => $query->with('providers'),
         ]);
         $playlist->loadCount('songs');
 
         return response()->json([
             'data' => $playlist,
             'imported_tracks' => $playlist->songs_count,
+            'lyrics_found' => $lyricsFound,
         ], 201);
+    }
+
+    /**
+     * @param  list<array{song_id: string, duration_ms: int|null}>  $pending
+     */
+    private function enrichImportedLyrics(array $pending): int
+    {
+        $found = 0;
+
+        foreach ($pending as $item) {
+            $song = Song::query()->find($item['song_id']);
+            if (! $song || trim((string) $song->lyrics) !== '') {
+                continue;
+            }
+
+            try {
+                $result = $this->lyrics->lookup(
+                    (string) $song->title,
+                    (string) $song->artist,
+                    $item['duration_ms'],
+                );
+            } catch (Throwable) {
+                continue;
+            }
+
+            if ($result === null || trim($result['lyrics']) === '') {
+                continue;
+            }
+
+            $song->forceFill(['lyrics' => $result['lyrics']])->save();
+            $found++;
+        }
+
+        return $found;
     }
 }

@@ -1,5 +1,6 @@
 import type { Credentials, CredentialsProvider } from '@tidal-music/common';
 import api from '@/lib/api';
+import { t } from '@/i18n';
 import type { MusicProvider } from '../MusicProvider';
 import type {
     MusicProviderId,
@@ -31,17 +32,14 @@ function trackIdFromUri(uri: string): string {
 }
 
 function humanizeTidalError(error: unknown): string {
-    const raw = error instanceof Error ? error.message : String(error ?? 'Unbekannter Fehler');
+    const raw = error instanceof Error ? error.message : String(error ?? t('providers.tidalUnknown'));
     if (/\bS1002\b/.test(raw) || /\bHTTP_ERROR\b/i.test(raw)) {
-        return (
-            'TIDAL-Stream fehlgeschlagen (S1002 / Netzwerk). ' +
-            'Das SDK lädt die Medien selbst — bitte Token/Scopes prüfen und TIDAL ggf. neu verbinden.'
-        );
+        return t('providers.tidalStream');
     }
     if (/\bS60\d{2}\b/.test(raw)) {
-        return `TIDAL DRM-Fehler (${raw}). Widevine ist in diesem Browser ggf. blockiert.`;
+        return t('providers.tidalDrm', { raw });
     }
-    return raw.startsWith('TIDAL') ? raw : `TIDAL Player-Fehler: ${raw}`;
+    return raw.startsWith('TIDAL') ? raw : t('providers.tidalPlayer', { raw });
 }
 
 /**
@@ -156,10 +154,10 @@ export class TidalProvider implements MusicProvider {
             }>('/music/tidal/token');
 
             if (!data.client_id) {
-                throw new Error('TIDAL client_id fehlt.');
+                throw new Error(t('providers.tidalClientId'));
             }
             if (!data.access_token) {
-                throw new Error('TIDAL access_token fehlt.');
+                throw new Error(t('providers.tidalToken'));
             }
 
             const credentials: Credentials = {
@@ -290,9 +288,7 @@ export class TidalProvider implements MusicProvider {
 
     async play(track: PlayableTrack, positionMs = 0): Promise<void> {
         if (track.provider !== 'tidal' && !track.uri.startsWith('tidal:')) {
-            throw new Error(
-                'Dieser Track ist kein TIDAL-Titel. Wechsle den Player-Provider oder verbinde den passenden Dienst.',
-            );
+            throw new Error(t('providers.tidalWrongTrack'));
         }
 
         await this.ensureReady();
@@ -303,6 +299,9 @@ export class TidalProvider implements MusicProvider {
         this.currentTitle = track.title;
         this.currentArtists = track.artist ? [track.artist] : [];
         this.currentArt = track.albumArtUrl;
+        this.durationSeconds =
+            track.durationMs && track.durationMs > 0 ? track.durationMs / 1000 : 0;
+        this.positionSeconds = Math.max(0, positionMs / 1000);
 
         // Warm Laravel-managed OAuth token only — do not touch media CDNs from app code.
         await this.fetchCredentials(true);
@@ -344,7 +343,7 @@ export class TidalProvider implements MusicProvider {
             await this.connect();
         }
         if (!this._ready || !this.bootstrapped || !this.eventSenderReady) {
-            throw new Error('TIDAL Player ist noch nicht bereit.');
+            throw new Error(t('providers.tidalNotReady'));
         }
     }
 
@@ -468,7 +467,7 @@ export class TidalProvider implements MusicProvider {
     private onPlayerError = (event: Event) => {
         const detail = (event as CustomEvent<{ errorCode?: string; message?: string }>).detail;
         const code = detail?.errorCode ? ` (${detail.errorCode})` : '';
-        this.emitError(humanizeTidalError(new Error((detail?.message || 'TIDAL Player-Fehler') + code)));
+        this.emitError(humanizeTidalError(new Error((detail?.message || t('providers.tidalError')) + code)));
     };
 
     private onDeviceChange = () => {
@@ -481,7 +480,7 @@ export class TidalProvider implements MusicProvider {
 
     private onEnded = () => {
         this.paused = true;
-        this.emitState();
+        this.emitState({ ended: true });
     };
 
     private startPositionPolling(): void {
@@ -522,15 +521,21 @@ export class TidalProvider implements MusicProvider {
             duration: Math.floor(this.durationSeconds * 1000),
             track: {
                 uri: this.currentUri,
-                name: this.currentTitle || 'Track',
+                name: this.currentTitle || t('player.fallbackTrack'),
                 artists: this.currentArtists,
                 albumArtUrl: this.currentArt,
             },
         };
     }
 
-    private emitState(): void {
+    private emitState(options?: { ended?: boolean }): void {
         const state = this.buildState();
+        if (!state) {
+            return;
+        }
+        if (options?.ended) {
+            state.ended = true;
+        }
         this.stateListeners.forEach((cb) => cb(state));
     }
 

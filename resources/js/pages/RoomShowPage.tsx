@@ -13,6 +13,7 @@ import {
     Users,
 } from 'lucide-react';
 import { useAuth } from '@/context/auth-context';
+import { useI18n } from '@/context/locale-context';
 import { usePlayer, formatTime } from '@/context/player-context';
 import { useRoom } from '@/context/room-context';
 import api from '@/lib/api';
@@ -23,12 +24,14 @@ import { Input } from '@/components/ui/input';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { AppTooltip } from '@/components/ui/tooltip';
 
 const REACTION_EMOJIS = ['🔥', '👏', '❤️', '😂', '🎵', '🙌'];
 
 export function RoomShowPage() {
     const { code = '' } = useParams();
     const navigate = useNavigate();
+    const { t } = useI18n();
     const { user } = useAuth();
     const { positionMs, playing, ready } = usePlayer();
     const {
@@ -66,7 +69,7 @@ export function RoomShowPage() {
             try {
                 await join(code);
             } catch {
-                setBootError('Raum nicht gefunden oder Beitritt fehlgeschlagen.');
+                setBootError(t('rooms.notFound'));
             }
         })();
     }, [code, join, room?.code]);
@@ -92,14 +95,14 @@ export function RoomShowPage() {
             <div className="space-y-4">
                 <Alert variant="error">{bootError}</Alert>
                 <Button asChild variant="outline">
-                    <Link to="/rooms">Zurück</Link>
+                    <Link to="/rooms">{t('common.back')}</Link>
                 </Button>
             </div>
         );
     }
 
     if (!room) {
-        return <p className="text-muted">Raum wird geladen…</p>;
+        return <p className="text-muted">{t('rooms.loadingRoom')}</p>;
     }
 
     const canControl = room.can_control;
@@ -138,29 +141,29 @@ export function RoomShowPage() {
                 <div>
                     <p className="text-sm text-muted">
                         <Link to="/rooms" className="hover:text-accent">
-                            ← Hörräume
+                            {t('rooms.back')}
                         </Link>
                     </p>
                     <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">{room.name}</h1>
                     <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted">
                         <span className="font-mono tracking-widest text-ink">{room.code}</span>
                         <Badge>{room.my_role}</Badge>
-                        {!ready && <span>Player initialisiert…</span>}
+                        {!ready && <span>{t('rooms.playerInit')}</span>}
                     </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <Button type="button" variant="outline" size="sm" onClick={() => void copyLink()}>
                         {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                        Link
+                        {t('rooms.link')}
                     </Button>
                     {isHost && (
                         <Button type="button" variant="destructive" size="sm" onClick={() => void close().then(() => navigate('/rooms'))}>
-                            Schließen
+                            {t('common.close')}
                         </Button>
                     )}
                     <Button type="button" variant="ghost" size="sm" onClick={() => void onLeave()}>
                         <LogOut className="h-4 w-4" />
-                        Verlassen
+                        {t('rooms.leave')}
                     </Button>
                 </div>
             </div>
@@ -178,38 +181,58 @@ export function RoomShowPage() {
                             )}
                             <div className="min-w-0 flex-1">
                                 <p className="truncate font-display text-xl font-semibold">
-                                    {room.state.track_title || 'Kein Track'}
+                                    {room.state.track_title || t('rooms.noTrack')}
                                 </p>
-                                <p className="truncate text-muted">{room.state.track_artist || '—'}</p>
+                                <p className="truncate text-muted">{room.state.track_artist || t('common.dash')}</p>
                                 <p className="mt-1 text-xs tabular-nums text-muted">{formatTime(positionMs)}</p>
                             </div>
                             {canControl && (
                                 <div className="flex gap-2">
-                                    <Button type="button" variant="accent" size="icon" onClick={() => void onToggle()}>
-                                        {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                                    </Button>
-                                    <Button type="button" variant="outline" size="icon" onClick={() => void sendPlayback('next')}>
-                                        <SkipForward className="h-4 w-4" />
-                                    </Button>
+                                    <AppTooltip label={playing ? t('common.pause') : t('common.play')}>
+                                        <Button
+                                            type="button"
+                                            variant="accent"
+                                            size="icon"
+                                            onClick={() => void onToggle()}
+                                            aria-label={playing ? t('common.pause') : t('common.play')}
+                                        >
+                                            {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                                        </Button>
+                                    </AppTooltip>
+                                    <AppTooltip label={t('common.next')}>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => void sendPlayback('next')}
+                                            aria-label={t('common.next')}
+                                        >
+                                            <SkipForward className="h-4 w-4" />
+                                        </Button>
+                                    </AppTooltip>
                                 </div>
                             )}
                         </div>
                         {!canControl && (
-                            <p className="mt-3 text-xs text-muted">Nur Host/Moderator steuern die Wiedergabe — du hörst synchron mit.</p>
+                            <p className="mt-3 text-xs text-muted">{t('rooms.listenerHint')}</p>
                         )}
                     </div>
 
                     <div className="rounded-2xl border border-line bg-surface p-4">
                         <div className="mb-3 flex items-center justify-between gap-2">
-                            <h2 className="font-medium">Warteschlange</h2>
-                            <span className="text-xs text-muted">{room.queue.filter((q) => q.status === 'queued').length} Songs</span>
+                            <h2 className="font-medium">{t('rooms.queue')}</h2>
+                            <span className="text-xs text-muted">
+                                {t('common.songCount', {
+                                    count: room.queue.filter((q) => q.status === 'queued').length,
+                                })}
+                            </span>
                         </div>
 
                         <div className="mb-3 space-y-2">
                             <Input
                                 value={songQuery}
                                 onChange={(e) => setSongQuery(e.target.value)}
-                                placeholder="Song zur Queue hinzufügen…"
+                                placeholder={t('rooms.addToQueue')}
                             />
                             {songResults.length > 0 && (
                                 <ul className="max-h-40 overflow-auto rounded-lg border border-line">
@@ -283,7 +306,7 @@ export function RoomShowPage() {
                                     );
                                 })}
                             {room.queue.filter((q) => q.status === 'queued' || q.status === 'playing').length === 0 && (
-                                <p className="text-sm text-muted">Queue ist leer — Songs hinzufügen.</p>
+                                <p className="text-sm text-muted">{t('rooms.queueEmpty')}</p>
                             )}
                         </ul>
                     </div>
@@ -293,7 +316,7 @@ export function RoomShowPage() {
                     <div className="rounded-2xl border border-line bg-surface p-4">
                         <h2 className="mb-3 flex items-center gap-2 font-medium">
                             <Users className="h-4 w-4" />
-                            Zuhören ({listeners.length || room.members.length})
+                            {t('rooms.listening', { count: listeners.length || room.members.length })}
                         </h2>
                         <ul className="space-y-2">
                             {(listeners.length > 0
@@ -304,7 +327,7 @@ export function RoomShowPage() {
                                   }))
                                 : room.members.map((m) => ({
                                       id: m.user?.id ?? m.id,
-                                      name: m.user?.name ?? 'User',
+                                      name: m.user?.name ?? t('common.user'),
                                       role: m.role,
                                   }))
                             ).map((person) => (
@@ -328,7 +351,7 @@ export function RoomShowPage() {
                                                     )
                                                 }
                                             >
-                                                {person.role === 'moderator' ? 'Mod −' : 'Mod +'}
+                                                {person.role === 'moderator' ? t('rooms.modMinus') : t('rooms.modPlus')}
                                             </Button>
                                         )}
                                     </span>
@@ -352,18 +375,19 @@ export function RoomShowPage() {
                         </div>
                         <div className="mb-3 flex min-h-[2rem] flex-wrap gap-2">
                             {reactions.map((reaction) => (
-                                <span
+                                <AppTooltip
                                     key={reaction.emoji}
-                                    className="inline-flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-1 text-sm tabular-nums"
-                                    title={reaction.recent_users.join(', ')}
+                                    label={reaction.recent_users.join(', ')}
                                 >
-                                    <span className="text-base leading-none">{reaction.emoji}</span>
-                                    {reaction.count > 1 ? (
-                                        <span className="font-semibold text-ink">×{reaction.count}</span>
-                                    ) : (
-                                        <span className="text-muted">{reaction.user.name}</span>
-                                    )}
-                                </span>
+                                    <span className="inline-flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-1 text-sm tabular-nums">
+                                        <span className="text-base leading-none">{reaction.emoji}</span>
+                                        {reaction.count > 1 ? (
+                                            <span className="font-semibold text-ink">×{reaction.count}</span>
+                                        ) : (
+                                            <span className="text-muted">{reaction.user.name}</span>
+                                        )}
+                                    </span>
+                                </AppTooltip>
                             ))}
                         </div>
 
@@ -374,18 +398,18 @@ export function RoomShowPage() {
                                     <span className="text-ink/90">{message.body}</span>
                                 </div>
                             ))}
-                            {messages.length === 0 && <p className="text-sm text-muted">Noch keine Nachrichten.</p>}
+                            {messages.length === 0 && <p className="text-sm text-muted">{t('rooms.noMessages')}</p>}
                         </div>
 
                         <form onSubmit={onChat} className="flex gap-2">
                             <Input
                                 value={chatBody}
                                 onChange={(e) => setChatBody(e.target.value)}
-                                placeholder="Nachricht…"
+                                placeholder={t('rooms.messagePlaceholder')}
                                 maxLength={500}
                             />
                             <Button type="submit" disabled={!chatBody.trim()}>
-                                Senden
+                                {t('rooms.send')}
                             </Button>
                         </form>
                     </div>

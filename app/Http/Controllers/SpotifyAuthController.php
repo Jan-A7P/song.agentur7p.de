@@ -59,6 +59,13 @@ class SpotifyAuthController extends Controller
         try {
             $tokens = $this->spotify->exchangeCode($code);
             $this->spotify->storeTokens($request->user(), $tokens);
+
+            try {
+                $profile = $this->spotify->fetchProfile($tokens['access_token']);
+                $request->user()?->applySocialAvatar($profile['avatar'] ?? null);
+            } catch (\Throwable) {
+                // Avatar sync is best-effort.
+            }
         } catch (\Throwable) {
             return redirect($redirect.(str_contains($redirect, '?') ? '&' : '?').'spotify=token_failed');
         }

@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
-use App\Services\MusicConnectionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -44,7 +43,7 @@ class AuthController extends Controller
 
         if (! Auth::attempt($credentials, $request->boolean('remember'))) {
             throw ValidationException::withMessages([
-                'email' => ['Die angegebenen Zugangsdaten sind ungültig.'],
+                'email' => [__('Invalid credentials.')],
             ]);
         }
 
@@ -79,27 +78,10 @@ class AuthController extends Controller
     }
 
     /**
-     * @return array{
-     *   id: int,
-     *   name: string,
-     *   email: string,
-     *   music_connections: list<array{provider: string, connected: bool, enabled: bool}>,
-     *   active_provider: string|null,
-     *   spotify_connected: bool,
-     * }
+     * @return array<string, mixed>
      */
     private function userPayload(User $user): array
     {
-        $connections = app(MusicConnectionService::class);
-        $active = $connections->activeProvider($user);
-
-        return [
-            'id' => $user->id,
-            'name' => $user->name,
-            'email' => $user->email,
-            'music_connections' => $connections->connectionsPayload($user),
-            'active_provider' => $active?->value,
-            'spotify_connected' => $user->hasSpotifyConnected(),
-        ];
+        return $user->toApiArray();
     }
 }

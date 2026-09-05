@@ -12,7 +12,7 @@ return new class extends Migration
     {
         Schema::create('song_providers', function (Blueprint $table) {
             $table->uuid('id')->primary();
-            $table->foreignId('song_id')->constrained('songs')->cascadeOnDelete();
+            $table->foreignUuid('song_id')->constrained('songs')->cascadeOnDelete();
             $table->string('provider', 32);
             $table->string('provider_track_id');
             $table->string('provider_uri');

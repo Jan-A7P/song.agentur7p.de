@@ -1,8 +1,16 @@
 <?php
 
+use App\Http\Controllers\SocialAuthController;
 use App\Http\Controllers\SpotifyAuthController;
 use App\Http\Controllers\TidalAuthController;
 use Illuminate\Support\Facades\Route;
+
+Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirect'])
+    ->whereIn('provider', ['google', 'spotify'])
+    ->name('auth.social.redirect');
+Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'callback'])
+    ->whereIn('provider', ['google', 'spotify'])
+    ->name('auth.social.callback');
 
 Route::middleware('auth')->group(function () {
     Route::get('/music/spotify/redirect', [SpotifyAuthController::class, 'redirect'])->name('music.spotify.redirect');
@@ -18,4 +26,4 @@ Route::middleware('auth')->group(function () {
 
 Route::view('/', 'app');
 Route::view('/{any}', 'app')
-    ->where('any', '^(?!api|sanctum|spotify|music|broadcasting|up|storage|build|vendor).*$');
+    ->where('any', '^(?!api|sanctum|auth|spotify|music|broadcasting|up|storage|build|vendor).*$');

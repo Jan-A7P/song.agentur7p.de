@@ -13,9 +13,12 @@ export type PlayableTrack = {
     uri: string;
     title: string;
     artist: string;
+    artists?: { id: string; name: string; slug: string }[];
     albumArtUrl: string | null;
-    songId?: number;
+    songId?: string;
     lyrics?: string | null;
+    /** Catalog duration fallback when the provider reports 0/unknown. */
+    durationMs?: number | null;
     /** All stored provider links for this song (for fallback + mini-player switch). */
     providerLinks?: PlayableProviderLink[];
     preferredProvider?: MusicProviderId | null;
@@ -26,11 +29,15 @@ export type ProviderPlaybackState = {
     paused: boolean;
     position: number;
     duration: number;
+    /** True when the provider reports the current track finished. */
+    ended?: boolean;
     track: {
         uri: string;
         name: string;
         artists: string[];
         albumArtUrl: string | null;
+        /** Original URI when Spotify relinked the track to a market-specific ID. */
+        linkedFromUri?: string | null;
     } | null;
 };
 

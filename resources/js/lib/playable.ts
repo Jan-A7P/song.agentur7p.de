@@ -1,4 +1,5 @@
 import type { PlayerTrack } from '@/context/player-context';
+import { durationFromLyrics } from '@/lib/lrc';
 import { activeProviderId, isProviderConnected, providerLabel } from '@/lib/music';
 import type { MusicProviderId, PlayableProviderLink } from '@/music/types';
 import type { Song, SongProviderLink, User } from '@/types';
@@ -55,9 +56,14 @@ function linkToPlayerTrack(
         uri: link.provider_uri,
         title: song.title,
         artist: song.artist,
+        artists: song.artists?.map((a) => ({ id: a.id, name: a.name, slug: a.slug })),
         albumArtUrl: link.album_art_url ?? song.album_art_url,
         songId: song.id,
         lyrics: song.lyrics,
+        durationMs:
+            song.duration_ms && song.duration_ms > 0
+                ? song.duration_ms
+                : durationFromLyrics(song.lyrics),
         providerLinks: toPlayableLinks(allLinks),
         preferredProvider: song.preferred_provider ?? song.provider ?? null,
         lastWorkingProvider: song.last_working_provider ?? null,

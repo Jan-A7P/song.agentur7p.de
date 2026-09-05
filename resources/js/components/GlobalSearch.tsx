@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Command } from 'cmdk';
-import { ListMusic, Loader2, Music2, Plus, Radio, Search, Settings, X } from 'lucide-react';
+import { ListMusic, Loader2, Music2, Plus, Radio, Search, Settings, UserRound, X } from 'lucide-react';
 import api from '@/lib/api';
-import type { Paginated, Song } from '@/types';
+import type { Artist, Paginated, Song } from '@/types';
 import { useAuth } from '@/context/auth-context';
+import { useI18n } from '@/context/locale-context';
 import { cn } from '@/lib/utils';
 
 type Props = {
@@ -14,15 +15,18 @@ type Props = {
 
 export function GlobalSearch({ open, onOpenChange }: Props) {
     const navigate = useNavigate();
+    const { t } = useI18n();
     const { user } = useAuth();
     const [query, setQuery] = useState('');
     const [songs, setSongs] = useState<Song[]>([]);
+    const [artists, setArtists] = useState<Artist[]>([]);
     const [loading, setLoading] = useState(false);
 
     const close = useCallback(() => {
         onOpenChange(false);
         setQuery('');
         setSongs([]);
+        setArtists([]);
     }, [onOpenChange]);
 
     const go = useCallback(
@@ -57,6 +61,7 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
         const q = query.trim();
         if (q.length < 1) {
             setSongs([]);
+            setArtists([]);
             setLoading(false);
             return;
         }
@@ -65,21 +70,29 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
         const timer = window.setTimeout(async () => {
             setLoading(true);
             try {
-                const { data } = await api.get<Paginated<Song>>('/songs', {
-                    params: { q },
-                    signal: controller.signal,
-                });
-                setSongs(data.data.slice(0, 8));
+                const [songsRes, artistsRes] = await Promise.all([
+                    api.get<Paginated<Song>>('/songs', {
+                        params: { q },
+                        signal: controller.signal,
+                    }),
+                    api.get<Paginated<Artist>>('/artists', {
+                        params: { q },
+                        signal: controller.signal,
+                    }),
+                ]);
+                setSongs(songsRes.data.data.slice(0, 8));
+                setArtists(artistsRes.data.data.slice(0, 6));
             } catch {
                 if (!controller.signal.aborted) {
                     setSongs([]);
+                    setArtists([]);
                 }
             } finally {
                 if (!controller.signal.aborted) {
                     setLoading(false);
                 }
             }
-        }, 180);
+        }, 450);
 
         return () => {
             controller.abort();
@@ -96,12 +109,12 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
             <button
                 type="button"
                 className="absolute inset-0 bg-ink/40 backdrop-blur-[2px]"
-                aria-label="Suche schließen"
+                aria-label={t('search.close')}
                 onClick={close}
             />
 
             <Command
-                label="Globale Suche"
+                label={t('search.global')}
                 shouldFilter={false}
                 className="relative z-10 w-full max-w-xl overflow-hidden rounded-2xl border border-line bg-paper shadow-2xl"
             >
@@ -110,7 +123,7 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
                     <Command.Input
                         value={query}
                         onValueChange={setQuery}
-                        placeholder="Songs, Playlists oder Seiten…"
+                        placeholder={t('search.placeholder')}
                         className="h-14 w-full bg-transparent text-base outline-none placeholder:text-muted"
                         autoFocus
                     />
@@ -121,7 +134,7 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
                             type="button"
                             onClick={close}
                             className="rounded-md p-1.5 text-muted transition hover:bg-paper-2 hover:text-ink"
-                            aria-label="Schließen"
+                            aria-label={t('common.close')}
                         >
                             <X className="h-4 w-4" />
                         </button>
@@ -130,11 +143,49 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
 
                 <Command.List className="max-h-[min(60vh,28rem)] overflow-y-auto p-2">
                     <Command.Empty className="px-3 py-8 text-center text-sm text-muted">
-                        {query.trim() ? 'Keine Treffer.' : 'Tippe, um Songs zu suchen.'}
+                        {query.trim() ? t('search.noResults') : t('search.typeToSearch')}
                     </Command.Empty>
 
+                    {artists.length > 0 && (
+                        <Command.Group
+                            heading={t('search.artists')}
+                            className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-muted"
+                        >
+                            {artists.map((artist) => (
+                                <Command.Item
+                                    key={artist.id}
+                                    value={`artist-${artist.id}-${artist.name}`}
+                                    onSelect={() => go(`/artists/${artist.slug}`)}
+                                    className={cn(
+                                        'flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2 text-sm outline-none',
+                                        'data-[selected=true]:bg-paper-2',
+                                    )}
+                                >
+                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-paper-2">
+                                        <UserRound className="h-4 w-4 text-muted" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate font-medium">{artist.name}</p>
+                                        {typeof artist.songs_count === 'number' && (
+                                            <p className="truncate text-xs text-muted">
+                                                {t('common.songCount', { count: artist.songs_count })}
+                                            </p>
+                                        )}
+                                    </div>
+                                </Command.Item>
+                            ))}
+                        </Command.Group>
+                    )}
+
+                    {artists.length > 0 && songs.length > 0 && (
+                        <div className="mx-2 my-1 border-t border-line" role="separator" />
+                    )}
+
                     {songs.length > 0 && (
-                        <Command.Group heading="Songs" className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted">
+                        <Command.Group
+                            heading={t('search.tracks')}
+                            className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-muted"
+                        >
                             {songs.map((song) => (
                                 <Command.Item
                                     key={song.id}
@@ -165,9 +216,13 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
                         </Command.Group>
                     )}
 
+                    {(artists.length > 0 || songs.length > 0) && (
+                        <div className="mx-2 my-1 border-t border-line" role="separator" />
+                    )}
+
                     <Command.Group
-                        heading="Navigation"
-                        className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted"
+                        heading={t('search.navigation')}
+                        className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-muted"
                     >
                         <Command.Item
                             value="nav-songs"
@@ -175,7 +230,7 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
                             className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2.5 text-sm outline-none data-[selected=true]:bg-paper-2"
                         >
                             <Music2 className="h-4 w-4 text-muted" />
-                            Alle Songs
+                            {t('search.allSongs')}
                         </Command.Item>
                         <Command.Item
                             value="nav-playlists"
@@ -183,7 +238,7 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
                             className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2.5 text-sm outline-none data-[selected=true]:bg-paper-2"
                         >
                             <ListMusic className="h-4 w-4 text-muted" />
-                            Playlists
+                            {t('nav.playlists')}
                         </Command.Item>
                         {user && (
                             <Command.Item
@@ -192,7 +247,7 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
                                 className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2.5 text-sm outline-none data-[selected=true]:bg-paper-2"
                             >
                                 <Radio className="h-4 w-4 text-muted" />
-                                Hörräume
+                                {t('nav.rooms')}
                             </Command.Item>
                         )}
                         {user && (
@@ -202,7 +257,17 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
                                 className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2.5 text-sm outline-none data-[selected=true]:bg-paper-2"
                             >
                                 <Plus className="h-4 w-4 text-muted" />
-                                Song hinzufügen
+                                {t('nav.addSong')}
+                            </Command.Item>
+                        )}
+                        {user && (
+                            <Command.Item
+                                value="nav-profile"
+                                onSelect={() => go('/profile')}
+                                className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2.5 text-sm outline-none data-[selected=true]:bg-paper-2"
+                            >
+                                <UserRound className="h-4 w-4 text-muted" />
+                                {t('nav.profile')}
                             </Command.Item>
                         )}
                         {user && (
@@ -212,14 +277,14 @@ export function GlobalSearch({ open, onOpenChange }: Props) {
                                 className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2.5 text-sm outline-none data-[selected=true]:bg-paper-2"
                             >
                                 <Settings className="h-4 w-4 text-muted" />
-                                Einstellungen
+                                {t('nav.settings')}
                             </Command.Item>
                         )}
                     </Command.Group>
                 </Command.List>
 
                 <div className="flex items-center justify-between border-t border-line px-4 py-2 text-[11px] text-muted">
-                    <span>↑↓ navigieren · Enter öffnen</span>
+                    <span>{t('search.hint')}</span>
                     <kbd className="rounded border border-line bg-paper-2 px-1.5 py-0.5 font-sans">esc</kbd>
                 </div>
             </Command>
