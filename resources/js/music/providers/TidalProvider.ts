@@ -1,4 +1,4 @@
-import type { Credentials, CredentialsProvider } from '@tidal-music/common';
+import type { Credentials } from '@tidal-music/common';
 import api from '@/lib/api';
 import { t } from '@/i18n';
 import type { MusicProvider } from '../MusicProvider';
@@ -8,21 +8,21 @@ import type {
     ProviderPlaybackState,
     ProviderSearchTrack,
 } from '../types';
+import { mountTidalCustomElements, setTidalPlayProduct, unmountTidalCustomElements } from './tidal-elements';
 
 type TidalPlayerModule = typeof import('@tidal-music/player');
+type TidalAuthModule = typeof import('@tidal-music/auth');
+type TidalEventProducerModule = typeof import('@tidal-music/event-producer');
+type TidalWebComponentsModule = typeof import('@tidal-music/player-web-components');
+type TidalPlaybackContext = {
+    actualAssetPresentation?: string;
+    actualDuration?: number;
+    previewReason?: string;
+};
 
-const TIDAL_SCOPES = [
-    'user.read',
-    'search.read',
-    'playlists.read',
-    'collection.read',
-    'playback',
-    'entitlements.read',
-] as const;
-
-const READY_TIMEOUT_MS = 10_000;
-/** Refresh token from Laravel a bit before typical expiry. */
-const TOKEN_CACHE_MS = 50 * 60 * 1000;
+const TIDAL_SCOPES = ['playback', 'playlists.read'] as const;
+const LOAD_TIMEOUT_MS = 15_000;
+const PREVIEW_MAX_SECONDS = 35;
 
 function trackIdFromUri(uri: string): string {
     if (uri.startsWith('tidal:track:')) {
@@ -31,26 +31,76 @@ function trackIdFromUri(uri: string): string {
     return uri;
 }
 
+function errorDetail(error: unknown): { raw: string; code: string } {
+    if (error && typeof error === 'object') {
+        const record = error as { errorCode?: unknown; errorId?: unknown; message?: unknown };
+        const code = [record.errorCode, record.errorId].filter((part) => typeof part === 'string').join(' ');
+        const message = typeof record.message === 'string' ? record.message : '';
+        const raw = [message, code].filter(Boolean).join(' ').trim();
+        if (raw) {
+            return { raw, code };
+        }
+    }
+    if (error instanceof Error && error.message) {
+        return { raw: error.message, code: error.message };
+    }
+    return { raw: String(error ?? t('providers.tidalUnknown')), code: '' };
+}
+
 function humanizeTidalError(error: unknown): string {
-    const raw = error instanceof Error ? error.message : String(error ?? t('providers.tidalUnknown'));
-    if (/\bS1002\b/.test(raw) || /\bHTTP_ERROR\b/i.test(raw)) {
+    const { raw, code } = errorDetail(error);
+    const haystack = `${raw} ${code}`;
+    if (/\bNo active player\b/i.test(haystack)) {
+        return t('providers.tidalNoPlayer');
+    }
+    if (/\bPREVIEW\b/.test(haystack)) {
+        return t('providers.tidalPreview');
+    }
+    if (
+        /\bS1002\b/.test(haystack) ||
+        /\bS10\d{2}\b/.test(haystack) ||
+        /\bPENetwork\b/.test(haystack) ||
+        /\bHTTP_ERROR\b/i.test(haystack) ||
+        /CORS|Access-Control-Allow-Origin|Failed to fetch/i.test(haystack)
+    ) {
         return t('providers.tidalStream');
     }
-    if (/\bS60\d{2}\b/.test(raw)) {
+    if (/\bME01\b/.test(haystack) || /MEDIA_ERR_SRC_NOT_SUPPORTED|Failed to open media|HTMLMediaElement/i.test(haystack)) {
+        return t('providers.tidalMedia');
+    }
+    if (/\bS4034\b/.test(haystack) || /\bA4034\b/.test(haystack) || /\bPENotAllowed\b/.test(haystack)) {
+        return t('providers.tidalCapabilities');
+    }
+    if (/\bS60\d{2}\b/.test(haystack)) {
         return t('providers.tidalDrm', { raw });
     }
     return raw.startsWith('TIDAL') ? raw : t('providers.tidalPlayer', { raw });
 }
 
-/**
- * Official demo uses a noop EventSender when analytics delivery isn't needed.
- * The SDK still requires *some* EventSender before load/play.
- */
-function createNoopEventSender(): { sendEvent: (...args: unknown[]) => void } {
+function isPreviewContext(context: TidalPlaybackContext | null | undefined): boolean {
+    if (!context) {
+        return false;
+    }
+    if (context.actualAssetPresentation === 'PREVIEW' || Boolean(context.previewReason)) {
+        return true;
+    }
+    return typeof context.actualDuration === 'number' && context.actualDuration > 0 && context.actualDuration <= PREVIEW_MAX_SECONDS;
+}
+
+function browserPlatform(): { browserName: string; browserVersion: string; osName: string } {
+    const ua = navigator.userAgent;
+    let browserName = 'Chrome';
+    if (ua.includes('Firefox')) {
+        browserName = 'Firefox';
+    } else if (ua.includes('Edg/')) {
+        browserName = 'Edge';
+    } else if (ua.includes('Safari') && !ua.includes('Chrome')) {
+        browserName = 'Safari';
+    }
     return {
-        sendEvent() {
-            // no-op
-        },
+        browserName,
+        browserVersion: '1',
+        osName: navigator.platform || 'web',
     };
 }
 
@@ -58,8 +108,9 @@ function createNoopEventSender(): { sendEvent: (...args: unknown[]) => void } {
  * TIDAL Web Player SDK must not be imported at module top-level:
  * loading `@tidal-music/player` immediately hits api.tidal.com/v1/ping.
  *
- * Media URLs (e.g. sp-ad-fa.audio.tidal.com) must never be fetched by app code —
- * only via Player.load() / Player.play().
+ * `player-web-components` registers `<tidal-play-trigger>` and friends and is
+ * the official `setCredentialsProvider` path. Playback APIs (bootstrap/load)
+ * stay on `@tidal-music/player` so our bar can seek and set volume.
  */
 export class TidalProvider implements MusicProvider {
     readonly id: MusicProviderId = 'tidal';
@@ -67,12 +118,15 @@ export class TidalProvider implements MusicProvider {
     private _ready = false;
     private bootstrapped = false;
     private listenersAttached = false;
-    private eventSenderReady = false;
+    private authReady = false;
+    private eventProducerReady = false;
     private volume = 0.7;
     private connecting: Promise<void> | null = null;
-    private resetting: Promise<void> | null = null;
     private session = 0;
     private playerModule: TidalPlayerModule | null = null;
+    private authModule: TidalAuthModule | null = null;
+    private eventProducer: TidalEventProducerModule | null = null;
+    private webComponents: TidalWebComponentsModule | null = null;
     private currentUri: string | null = null;
     private currentTitle = '';
     private currentArtists: string[] = [];
@@ -81,10 +135,9 @@ export class TidalProvider implements MusicProvider {
     private durationSeconds = 0;
     private paused = true;
     private positionTimer: number | null = null;
-    private credentialsProvider: CredentialsProvider | null = null;
-    private cachedCredentials: Credentials | null = null;
-    private cachedCredentialsAt = 0;
-    private credentialsInflight: Promise<Credentials> | null = null;
+    private loadError: unknown = null;
+    private suppressErrorEmit = false;
+    private previewAborted = false;
 
     private stateListeners = new Set<(state: ProviderPlaybackState | null) => void>();
     private readyListeners = new Set<(ready: boolean) => void>();
@@ -95,8 +148,11 @@ export class TidalProvider implements MusicProvider {
     }
 
     async getAccessToken(): Promise<string> {
-        const credentials = await this.fetchCredentials(true);
-        return credentials.token ?? '';
+        const { data } = await api.get<{ access_token: string }>('/music/tidal/token');
+        if (!data.access_token) {
+            throw new Error(t('providers.tidalToken'));
+        }
+        return data.access_token;
     }
 
     async search(query: string): Promise<ProviderSearchTrack[]> {
@@ -107,7 +163,7 @@ export class TidalProvider implements MusicProvider {
     }
 
     async connect(): Promise<void> {
-        if (this._ready && this.bootstrapped && this.eventSenderReady) {
+        if (this._ready && this.bootstrapped) {
             return;
         }
         if (this.connecting) {
@@ -116,7 +172,6 @@ export class TidalProvider implements MusicProvider {
 
         const job = this.doConnect();
         this.connecting = job;
-
         try {
             await job;
         } finally {
@@ -126,163 +181,23 @@ export class TidalProvider implements MusicProvider {
         }
     }
 
-    private async loadPlayerModule(): Promise<TidalPlayerModule> {
-        if (!this.playerModule) {
-            await import('shaka-player');
-            this.playerModule = await import('@tidal-music/player');
-        }
-        return this.playerModule;
-    }
-
-    private async fetchCredentials(force = false): Promise<Credentials> {
-        const fresh =
-            !force &&
-            this.cachedCredentials?.token &&
-            Date.now() - this.cachedCredentialsAt < TOKEN_CACHE_MS;
-        if (fresh && this.cachedCredentials) {
-            return this.cachedCredentials;
-        }
-
-        if (this.credentialsInflight) {
-            return this.credentialsInflight;
-        }
-
-        this.credentialsInflight = (async () => {
-            const { data } = await api.get<{
-                access_token: string;
-                client_id?: string | null;
-            }>('/music/tidal/token');
-
-            if (!data.client_id) {
-                throw new Error(t('providers.tidalClientId'));
-            }
-            if (!data.access_token) {
-                throw new Error(t('providers.tidalToken'));
-            }
-
-            const credentials: Credentials = {
-                clientId: data.client_id,
-                token: data.access_token,
-                requestedScopes: [...TIDAL_SCOPES],
-            };
-            this.cachedCredentials = credentials;
-            this.cachedCredentialsAt = Date.now();
-            return credentials;
-        })();
-
-        try {
-            return await this.credentialsInflight;
-        } finally {
-            this.credentialsInflight = null;
-        }
-    }
-
-    private async doConnect(): Promise<void> {
-        if (this.resetting) {
-            await this.resetting;
-        }
-
-        const session = this.session;
-
-        try {
-            const Player = await this.loadPlayerModule();
-            if (session !== this.session) {
-                return;
-            }
-
-            const credentialsProvider = this.createCredentialsProvider();
-            await credentialsProvider.getCredentials();
-            if (session !== this.session) {
-                return;
-            }
-            this.credentialsProvider = credentialsProvider;
-            Player.setCredentialsProvider(credentialsProvider);
-
-            Player.setEventSender(createNoopEventSender() as never);
-            this.eventSenderReady = true;
-
-            this.attachListeners(Player);
-
-            // Match official demo / SDK defaults: shaka handles track (+ video) manifests.
-            Player.bootstrap({
-                outputDevices: false,
-                players: [
-                    {
-                        player: 'shaka',
-                        itemTypes: ['track', 'video'],
-                    },
-                ],
-            });
-
-            await this.waitUntilPlayerIdle(Player, session);
-            if (session !== this.session) {
-                return;
-            }
-
-            this.bootstrapped = true;
-            await Player.setVolumeLevel(Math.round(this.volume * 100));
-            if (session !== this.session) {
-                return;
-            }
-
-            this.setReady(true);
-            this.startPositionPolling();
-        } catch (e) {
-            if (session !== this.session) {
-                return;
-            }
-            this.bootstrapped = false;
-            this.eventSenderReady = false;
-            this.setReady(false);
-            const message = humanizeTidalError(e);
-            this.emitError(message);
-            throw e instanceof Error ? e : new Error(message);
-        }
-    }
-
-    private async waitUntilPlayerIdle(Player: TidalPlayerModule, session: number): Promise<void> {
-        const started = Date.now();
-        while (Date.now() - started < READY_TIMEOUT_MS) {
-            if (session !== this.session) {
-                return;
-            }
-            const state = Player.getPlaybackState();
-            if (state === 'IDLE' || state === 'NOT_PLAYING') {
-                return;
-            }
-            await new Promise((resolve) => window.setTimeout(resolve, 50));
-        }
-    }
-
     disconnect(): void {
         this.session += 1;
         this.connecting = null;
         this.stopPositionPolling();
         this.detachListeners();
-        this.bootstrapped = false;
-        this.eventSenderReady = false;
-        this.credentialsProvider = null;
-        this.cachedCredentials = null;
-        this.cachedCredentialsAt = 0;
-        this.credentialsInflight = null;
         this.setReady(false);
         this.currentUri = null;
         this.positionSeconds = 0;
         this.durationSeconds = 0;
         this.paused = true;
+        this.loadError = null;
+        setTidalPlayProduct(null);
+        unmountTidalCustomElements();
 
-        const Player = this.playerModule;
-        if (!Player) {
-            return;
-        }
-
-        const resetJob = Player.reset().catch(() => {
+        void this.playerModule?.pause();
+        void this.playerModule?.reset().catch(() => {
             // ignore
-        });
-        this.resetting = resetJob.finally(() => {
-            if (this.resetting === resetJob) {
-                this.resetting = null;
-            }
         });
     }
 
@@ -292,59 +207,32 @@ export class TidalProvider implements MusicProvider {
         }
 
         await this.ensureReady();
-        const Player = await this.loadPlayerModule();
-
+        const Player = this.requirePlayer();
         const productId = track.trackId || trackIdFromUri(track.uri);
+
         this.currentUri = track.uri.startsWith('tidal:') ? track.uri : `tidal:track:${productId}`;
         this.currentTitle = track.title;
         this.currentArtists = track.artist ? [track.artist] : [];
         this.currentArt = track.albumArtUrl;
-        this.durationSeconds =
-            track.durationMs && track.durationMs > 0 ? track.durationMs / 1000 : 0;
+        this.durationSeconds = track.durationMs && track.durationMs > 0 ? track.durationMs / 1000 : 0;
         this.positionSeconds = Math.max(0, positionMs / 1000);
-
-        // Warm Laravel-managed OAuth token only — do not touch media CDNs from app code.
-        await this.fetchCredentials(true);
-        await api.post('/music/tidal/play', {
-            uri: this.currentUri,
-            device_id: 'tidal-web',
-            position_ms: positionMs > 0 ? positionMs : undefined,
-        });
-
-        const startAtSeconds = Math.max(0, positionMs / 1000);
+        this.previewAborted = false;
+        setTidalPlayProduct(productId, 'track');
 
         try {
-            // SDK owns auth → playback info → DRM → media bytes.
-            await Player.load(
-                {
-                    productType: 'track',
-                    productId,
-                    sourceType: 'catalog',
-                    sourceId: productId,
-                },
-                startAtSeconds,
-            );
-            await Player.play();
+            await this.loadAndPlay(Player, productId, Math.max(0, positionMs / 1000));
+            this.applyVolume(Player);
         } catch (error) {
+            this.paused = true;
+            this.stopPositionPolling();
             const message = humanizeTidalError(error);
             this.emitError(message);
             throw error instanceof Error ? error : new Error(message);
         }
 
         this.paused = false;
+        this.startPositionPolling();
         this.emitState();
-    }
-
-    private async ensureReady(): Promise<void> {
-        if (this.resetting) {
-            await this.resetting;
-        }
-        if (!this._ready || !this.bootstrapped || !this.eventSenderReady) {
-            await this.connect();
-        }
-        if (!this._ready || !this.bootstrapped || !this.eventSenderReady) {
-            throw new Error(t('providers.tidalNotReady'));
-        }
     }
 
     async pause(): Promise<void> {
@@ -358,9 +246,25 @@ export class TidalProvider implements MusicProvider {
 
     async resume(): Promise<void> {
         await this.ensureReady();
-        const Player = await this.loadPlayerModule();
-        await Player.play();
+        await this.requirePlayer().play();
         this.paused = false;
+        this.startPositionPolling();
+        this.emitState();
+    }
+
+    async silence(): Promise<void> {
+        this.stopPositionPolling();
+        this.paused = true;
+        try {
+            await this.playerModule?.pause();
+        } catch {
+            // ignore
+        }
+        try {
+            await this.playerModule?.reset();
+        } catch {
+            // ignore
+        }
         this.emitState();
     }
 
@@ -376,7 +280,7 @@ export class TidalProvider implements MusicProvider {
     async setVolume(volume: number): Promise<void> {
         this.volume = Math.min(1, Math.max(0, volume));
         if (this._ready && this.playerModule) {
-            await this.playerModule.setVolumeLevel(Math.round(this.volume * 100));
+            this.applyVolume(this.playerModule);
         }
     }
 
@@ -399,25 +303,279 @@ export class TidalProvider implements MusicProvider {
         return () => this.errorListeners.delete(cb);
     }
 
-    private createCredentialsProvider(): CredentialsProvider {
-        return {
-            bus: () => {
-                // Server-managed tokens; no local credential bus events needed.
-            },
-            getCredentials: async () => this.fetchCredentials(false),
+    private async doConnect(): Promise<void> {
+        const session = this.session;
+
+        try {
+            const [auth, Player, eventProducer, webComponents] = await Promise.all([
+                this.authModule ? Promise.resolve(this.authModule) : import('@tidal-music/auth'),
+                this.playerModule ? Promise.resolve(this.playerModule) : import('@tidal-music/player'),
+                this.eventProducer ? Promise.resolve(this.eventProducer) : import('@tidal-music/event-producer'),
+                this.webComponents
+                    ? Promise.resolve(this.webComponents)
+                    : import('@tidal-music/player-web-components'),
+            ]);
+            if (session !== this.session) {
+                return;
+            }
+            this.authModule = auth;
+            this.playerModule = Player;
+            this.eventProducer = eventProducer;
+            this.webComponents = webComponents;
+
+            const credentials = await this.fetchLaravelCredentials();
+            if (session !== this.session) {
+                return;
+            }
+
+            if (!this.authReady) {
+                await auth.init({
+                    clientId: credentials.clientId,
+                    credentialsStorageKey: 'songtexte.tidal',
+                    scopes: [...TIDAL_SCOPES],
+                });
+                this.authReady = true;
+            }
+
+            await this.applyCredentials(auth, credentials);
+
+            await mountTidalCustomElements();
+            webComponents.setCredentialsProvider(auth.credentialsProvider);
+            Player.setCredentialsProvider(auth.credentialsProvider);
+
+            if (!this.eventProducerReady) {
+                await eventProducer.init({
+                    appInfo: { appName: 'Songtexte', appVersion: '1.0.0' },
+                    blockedConsentCategories: {
+                        NECESSARY: false,
+                        PERFORMANCE: true,
+                        TARGETING: true,
+                    },
+                    credentialsProvider: auth.credentialsProvider,
+                    platform: browserPlatform(),
+                    tlConsumerUri: 'https://ec.tidal.com/api/event-batch',
+                    tlPublicConsumerUri: 'https://ec.tidal.com/api/public/event-batch',
+                });
+                this.eventProducerReady = true;
+            }
+            webComponents.setEventSender(eventProducer);
+            Player.setEventSender(eventProducer);
+
+            this.attachListeners(Player);
+
+            if (!this.bootstrapped) {
+                Player.bootstrap({
+                    outputDevices: false,
+                    players: [
+                        {
+                            player: 'shaka',
+                            itemTypes: ['track', 'video'],
+                            qualities: ['HIGH', 'LOSSLESS', 'LOW', 'HI_RES_LOSSLESS'],
+                        },
+                    ],
+                });
+                this.bootstrapped = true;
+            }
+
+            this.applyVolume(Player);
+            this.setReady(true);
+        } catch (error) {
+            if (session !== this.session) {
+                return;
+            }
+            this.setReady(false);
+            const message = humanizeTidalError(error);
+            this.emitError(message);
+            throw error instanceof Error ? error : new Error(message);
+        }
+    }
+
+    private async fetchLaravelCredentials(): Promise<Credentials & { refreshToken?: string }> {
+        const { data } = await api.get<{
+            access_token: string;
+            refresh_token?: string | null;
+            client_id?: string | null;
+            user_id?: string | number | null;
+            expires_at?: number | null;
+        }>('/music/tidal/token');
+
+        if (!data.client_id) {
+            throw new Error(t('providers.tidalClientId'));
+        }
+        if (!data.access_token) {
+            throw new Error(t('providers.tidalToken'));
+        }
+
+        const credentials: Credentials & { refreshToken?: string } = {
+            clientId: data.client_id,
+            token: data.access_token,
+            requestedScopes: [...TIDAL_SCOPES],
+            grantedScopes: [...TIDAL_SCOPES],
         };
+        if (data.user_id != null && String(data.user_id) !== '') {
+            credentials.userId = String(data.user_id);
+        }
+        if (typeof data.expires_at === 'number' && data.expires_at > 0) {
+            credentials.expires = data.expires_at;
+        }
+        if (data.refresh_token) {
+            credentials.refreshToken = data.refresh_token;
+        }
+        return credentials;
+    }
+
+    private async applyCredentials(
+        auth: TidalAuthModule,
+        credentials: Credentials & { refreshToken?: string },
+    ): Promise<void> {
+        const payload = {
+            accessToken: {
+                clientId: credentials.clientId,
+                token: credentials.token,
+                requestedScopes: credentials.requestedScopes,
+                grantedScopes: credentials.grantedScopes ?? credentials.requestedScopes,
+                userId: credentials.userId,
+                expires: credentials.expires,
+            },
+            refreshToken: credentials.refreshToken,
+        };
+
+        try {
+            await auth.setCredentials(payload);
+        } catch {
+            auth.logout();
+            await auth.setCredentials(payload);
+        }
+    }
+
+    private async loadAndPlay(Player: TidalPlayerModule, productId: string, startAtSeconds: number): Promise<void> {
+        this.loadError = null;
+        this.previewAborted = false;
+        this.suppressErrorEmit = true;
+
+        let timeoutId = 0;
+        const timeout = new Promise<never>((_, reject) => {
+            timeoutId = window.setTimeout(() => reject(new Error(t('providers.tidalNotReady'))), LOAD_TIMEOUT_MS);
+        });
+
+
+        try {
+            await Promise.race([
+                Player.load(
+                    {
+                        productType: 'track',
+                        productId,
+                        sourceType: 'catalog',
+                        sourceId: productId,
+                    },
+                    startAtSeconds,
+                ),
+                timeout,
+            ]);
+
+            if (this.loadError) {
+                throw this.loadError;
+            }
+            if (this.previewAborted) {
+                throw new Error('PREVIEW');
+            }
+
+            this.rejectIfPreview(Player.getPlaybackContext());
+
+            const media = Player.getMediaElement();
+            const state = Player.getPlaybackState();
+            if (!media && state === 'IDLE') {
+                throw new Error('No active player');
+            }
+
+            await Player.play();
+            await this.waitForAudibleStart(Player);
+            if (this.loadError) {
+                throw this.loadError;
+            }
+            if (this.previewAborted) {
+                throw new Error('PREVIEW');
+            }
+        } finally {
+            window.clearTimeout(timeoutId);
+            this.suppressErrorEmit = false;
+        }
+    }
+
+    /** CORS/S1002 hits when Shaka fetches `*.audio.tidal.com` — after play() resolves. */
+    private async waitForAudibleStart(Player: TidalPlayerModule): Promise<void> {
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+            if (this.loadError) {
+                throw this.loadError;
+            }
+            if (this.previewAborted) {
+                throw new Error('PREVIEW');
+            }
+
+            const media = Player.getMediaElement();
+            const pos = Player.getAssetPosition();
+            const time =
+                typeof pos === 'number' && Number.isFinite(pos) && pos > 0
+                    ? pos
+                    : (media?.currentTime ?? 0);
+            if (Player.getPlaybackState() === 'PLAYING' && time > 0.05) {
+                return;
+            }
+
+            await new Promise((resolve) => window.setTimeout(resolve, 120));
+        }
+
+        if (this.loadError) {
+            throw this.loadError;
+        }
+        throw new Error('S1002');
+    }
+
+    private rejectIfPreview(context: TidalPlaybackContext | null | undefined): void {
+        if (!isPreviewContext(context)) {
+            return;
+        }
+        this.previewAborted = true;
+        void this.playerModule?.pause();
+        void this.playerModule?.reset().catch(() => {
+            // ignore
+        });
+        throw new Error('PREVIEW');
+    }
+
+    private applyVolume(Player: TidalPlayerModule): void {
+        Player.setVolumeLevel(this.volume);
+        const media = Player.getMediaElement();
+        if (media) {
+            media.volume = this.volume;
+        }
+    }
+
+    private async ensureReady(): Promise<void> {
+        if (!this._ready || !this.bootstrapped) {
+            await this.connect();
+        }
+        if (!this._ready || !this.bootstrapped) {
+            throw new Error(t('providers.tidalNotReady'));
+        }
+    }
+
+    private requirePlayer(): TidalPlayerModule {
+        if (!this.playerModule) {
+            throw new Error(t('providers.tidalNotReady'));
+        }
+        return this.playerModule;
     }
 
     private attachListeners(Player: TidalPlayerModule): void {
         if (this.listenersAttached) {
             return;
         }
-        Player.events.addEventListener('playback-state-change', this.onPlaybackStateChange as EventListener);
-        Player.events.addEventListener('media-product-transition', this.onMediaProductTransition as EventListener);
-        Player.events.addEventListener('error', this.onPlayerError as EventListener);
-        Player.events.addEventListener('device-change', this.onDeviceChange as EventListener);
-        Player.events.addEventListener('active-device-changed', this.onActiveDeviceChanged as EventListener);
-        Player.events.addEventListener('ended', this.onEnded as EventListener);
+        Player.events.addEventListener('error', this.onPlayerError);
+        Player.events.addEventListener('playback-state-change', this.onPlaybackStateChange);
+        Player.events.addEventListener('media-product-transition', this.onMediaProductTransition);
+        Player.events.addEventListener('ended', this.onEnded);
         this.listenersAttached = true;
     }
 
@@ -427,12 +585,10 @@ export class TidalProvider implements MusicProvider {
             return;
         }
         const Player = this.playerModule;
-        Player.events.removeEventListener('playback-state-change', this.onPlaybackStateChange as EventListener);
-        Player.events.removeEventListener('media-product-transition', this.onMediaProductTransition as EventListener);
-        Player.events.removeEventListener('error', this.onPlayerError as EventListener);
-        Player.events.removeEventListener('device-change', this.onDeviceChange as EventListener);
-        Player.events.removeEventListener('active-device-changed', this.onActiveDeviceChanged as EventListener);
-        Player.events.removeEventListener('ended', this.onEnded as EventListener);
+        Player.events.removeEventListener('error', this.onPlayerError);
+        Player.events.removeEventListener('playback-state-change', this.onPlaybackStateChange);
+        Player.events.removeEventListener('media-product-transition', this.onMediaProductTransition);
+        Player.events.removeEventListener('ended', this.onEnded);
         this.listenersAttached = false;
     }
 
@@ -450,9 +606,19 @@ export class TidalProvider implements MusicProvider {
         const detail = (
             event as CustomEvent<{
                 mediaProduct?: { productId?: string };
-                playbackContext?: { actualDuration?: number };
+                playbackContext?: TidalPlaybackContext;
             }>
         ).detail;
+        try {
+            this.rejectIfPreview(detail?.playbackContext);
+        } catch {
+            if (!this.suppressErrorEmit) {
+                this.emitError(t('providers.tidalPreview'));
+            }
+            this.paused = true;
+            this.emitState();
+            return;
+        }
         const productId = detail?.mediaProduct?.productId;
         if (productId) {
             this.currentUri = `tidal:track:${productId}`;
@@ -465,17 +631,12 @@ export class TidalProvider implements MusicProvider {
     };
 
     private onPlayerError = (event: Event) => {
-        const detail = (event as CustomEvent<{ errorCode?: string; message?: string }>).detail;
-        const code = detail?.errorCode ? ` (${detail.errorCode})` : '';
-        this.emitError(humanizeTidalError(new Error((detail?.message || t('providers.tidalError')) + code)));
-    };
-
-    private onDeviceChange = () => {
-        // Observed for SDK readiness / device routing; no UI action required.
-    };
-
-    private onActiveDeviceChanged = () => {
-        // Observed for SDK readiness / device routing; no UI action required.
+        const detail = (event as CustomEvent<unknown>).detail;
+        this.loadError = detail ?? event;
+        if (this.suppressErrorEmit) {
+            return;
+        }
+        this.emitError(humanizeTidalError(this.loadError));
     };
 
     private onEnded = () => {
@@ -495,7 +656,7 @@ export class TidalProvider implements MusicProvider {
             } catch {
                 // ignore
             }
-        }, 500);
+        }, 250);
     }
 
     private stopPositionPolling(): void {

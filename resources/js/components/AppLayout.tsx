@@ -17,12 +17,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { PartyToggle } from '@/components/PartyToggle';
+import { CarmineToggle } from '@/components/CarmineToggle';
 import { PartyLights } from '@/components/PartyLights';
+import { CarmineFire } from '@/components/CarmineFire';
 import { PersistentPlayerBar } from '@/components/PersistentPlayerBar';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { HeaderSearch } from '@/components/HeaderSearch';
 import { UserAvatar } from '@/components/UserAvatar';
-import { hasMusicConnected } from '@/lib/music';
+import { hasPlaybackConnected } from '@/lib/music';
 import { cn } from '@/lib/utils';
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
@@ -38,7 +40,7 @@ export function AppLayout() {
     const { pathname } = useLocation();
     const isAuthPage = pathname === '/login' || pathname === '/register';
     const isDiscoverPage = pathname === '/discover';
-    const playerVisible = Boolean(hasMusicConnected(user) && track) && !isAuthPage;
+    const playerVisible = Boolean(hasPlaybackConnected(user) && track) && !isAuthPage;
     const [commandOpen, setCommandOpen] = useState(false);
 
     useEffect(() => {
@@ -58,6 +60,7 @@ export function AppLayout() {
     return (
         <>
             <PartyLights />
+            <CarmineFire />
             <div
                 className={cn(
                     'relative z-10 flex w-full flex-col',
@@ -115,6 +118,7 @@ export function AppLayout() {
 
                     <div className="flex items-center justify-end gap-1.5 sm:gap-2">
                         <PartyToggle />
+                        <CarmineToggle />
                         <ThemeToggle />
 
                         {!loading && user && (

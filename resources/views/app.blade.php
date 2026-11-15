@@ -32,6 +32,15 @@
                 } catch (_) {
                     document.documentElement.lang = 'en';
                 }
+                try {
+                    const carmine = localStorage.getItem('songtexte.carmine') === '1';
+                    if (carmine) document.documentElement.classList.add('carmine');
+                    const accent = localStorage.getItem('songtexte.accent');
+                    if (accent && /^#[0-9a-fA-F]{6}$/.test(accent)) {
+                        document.documentElement.style.setProperty('--accent', accent);
+                        document.documentElement.setAttribute('data-accent', accent);
+                    }
+                } catch (_) {}
             })();
         </script>
         @vite(['resources/css/app.css', 'resources/js/main.tsx'])

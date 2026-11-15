@@ -1,6 +1,11 @@
 import type { User } from '@/types';
 import type { MusicProviderId } from '@/music/types';
 
+/** Providers that can actually play audio in this app. */
+export function providerSupportsPlayback(provider: MusicProviderId): boolean {
+    return provider === 'spotify' || provider === 'tidal';
+}
+
 export function hasMusicConnected(user: User | null | undefined): boolean {
     if (!user) {
         return false;
@@ -9,6 +14,21 @@ export function hasMusicConnected(user: User | null | undefined): boolean {
         return true;
     }
     return Boolean(user.spotify_connected);
+}
+
+export function playbackProviderIds(user: User | null | undefined): MusicProviderId[] {
+    return connectedProviderIds(user).filter(providerSupportsPlayback);
+}
+
+export function hasPlaybackConnected(user: User | null | undefined): boolean {
+    return playbackProviderIds(user).length > 0;
+}
+
+export function isPlaybackProviderConnected(
+    user: User | null | undefined,
+    provider: MusicProviderId,
+): boolean {
+    return providerSupportsPlayback(provider) && isProviderConnected(user, provider);
 }
 
 export function activeProviderId(user: User | null | undefined): MusicProviderId | null {

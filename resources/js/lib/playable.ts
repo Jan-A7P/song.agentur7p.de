@@ -1,6 +1,11 @@
 import type { PlayerTrack } from '@/context/player-context';
 import { durationFromLyrics } from '@/lib/lrc';
-import { activeProviderId, isProviderConnected, providerLabel } from '@/lib/music';
+import {
+    activeProviderId,
+    isProviderConnected,
+    providerLabel,
+    providerSupportsPlayback,
+} from '@/lib/music';
 import type { MusicProviderId, PlayableProviderLink } from '@/music/types';
 import type { Song, SongProviderLink, User } from '@/types';
 
@@ -29,7 +34,7 @@ export function songProviderLinks(song: Song): SongProviderLink[] {
 }
 
 export function songIsPlayable(song: Song): boolean {
-    return songProviderLinks(song).length > 0;
+    return songProviderLinks(song).some((link) => providerSupportsPlayback(link.provider));
 }
 
 export function songProviderIds(song: Song): MusicProviderId[] {
@@ -70,9 +75,51 @@ function linkToPlayerTrack(
     };
 }
 
+const LAST_PROVIDER_STORAGE_KEY = 'songtexte.last-song-provider';
+
+export function rememberSongPlaybackProvider(songId: string, provider: MusicProviderId): void {
+    try {
+        const raw = window.localStorage.getItem(LAST_PROVIDER_STORAGE_KEY);
+        const parsed = raw ? (JSON.parse(raw) as Record<string, MusicProviderId>) : {};
+        parsed[songId] = provider;
+        window.localStorage.setItem(LAST_PROVIDER_STORAGE_KEY, JSON.stringify(parsed));
+    } catch {
+        // private mode / quota
+    }
+}
+
+export function lastSongPlaybackProvider(songId: string): MusicProviderId | null {
+    try {
+        const raw = window.localStorage.getItem(LAST_PROVIDER_STORAGE_KEY);
+        if (!raw) {
+            return null;
+        }
+        const parsed = JSON.parse(raw) as Record<string, MusicProviderId>;
+        return parsed[songId] ?? null;
+    } catch {
+        return null;
+    }
+}
+
+export function songMatchesTrack(song: Song, track: { songId?: string | null; uri?: string | null } | null | undefined): boolean {
+    if (!track) {
+        return false;
+    }
+    if (track.songId && track.songId === song.id) {
+        return true;
+    }
+    return Boolean(track.uri && songProviderLinks(song).some((link) => link.provider_uri === track.uri));
+}
+
+export function connectedSongProviders(song: Song, user: User | null | undefined): MusicProviderId[] {
+    return songProviderLinks(song)
+        .map((link) => link.provider)
+        .filter((provider) => isProviderConnected(user, provider) && providerSupportsPlayback(provider));
+}
+
 /**
  * Pick the best stored provider link for playback.
- * Strict order: preferred → last working → user active → any linked+connected.
+ * Strict order: last explicit choice → preferred → last working → user active → any linked+connected.
  */
 export function resolveSongPlayback(
     song: Song,
@@ -84,13 +131,18 @@ export function resolveSongPlayback(
     }
 
     const byProvider = new Map(links.map((l) => [l.provider, l]));
-    const connected = (id: MusicProviderId) => isProviderConnected(user, id);
+    const connected = (id: MusicProviderId) =>
+        isProviderConnected(user, id) && providerSupportsPlayback(id);
 
+    const remembered = lastSongPlaybackProvider(song.id);
     const preferred = song.preferred_provider ?? null;
     const lastWorking = song.last_working_provider ?? null;
     const active = activeProviderId(user);
 
     const tryIds: MusicProviderId[] = [];
+    if (remembered) {
+        tryIds.push(remembered);
+    }
     if (preferred) {
         tryIds.push(preferred);
     }
@@ -116,11 +168,11 @@ export function resolveSongPlayback(
         }
     }
 
-    // Nothing connected: still return preferred (or first) so the player can attempt / search.
+    // Nothing connected: still return a playback-capable link so the player can prompt to connect.
     const fallback =
-        (preferred && byProvider.get(preferred)) ||
-        (lastWorking && byProvider.get(lastWorking)) ||
-        links[0];
+        (preferred && providerSupportsPlayback(preferred) && byProvider.get(preferred)) ||
+        (lastWorking && providerSupportsPlayback(lastWorking) && byProvider.get(lastWorking)) ||
+        links.find((link) => providerSupportsPlayback(link.provider));
 
     return fallback ? linkToPlayerTrack(song, fallback, links) : null;
 }
@@ -129,10 +181,33 @@ export function songToPlayerTrack(song: Song, user?: User | null): PlayerTrack |
     return resolveSongPlayback(song, user ?? null);
 }
 
+export function songToPlayerTrackForProvider(
+    song: Song,
+    provider: MusicProviderId,
+    user?: User | null,
+): PlayerTrack | null {
+    const links = songProviderLinks(song);
+    const link = links.find((item) => item.provider === provider);
+    if (!link) {
+        return null;
+    }
+    if (!providerSupportsPlayback(provider)) {
+        return null;
+    }
+    if (user && !isProviderConnected(user, provider)) {
+        return null;
+    }
+
+    return linkToPlayerTrack(song, link, links);
+}
+
 export function playerTrackForProvider(
     track: PlayerTrack,
     provider: MusicProviderId,
 ): PlayerTrack | null {
+    if (!providerSupportsPlayback(provider)) {
+        return null;
+    }
     const link = track.providerLinks?.find((l) => l.provider === provider);
     if (!link) {
         return null;

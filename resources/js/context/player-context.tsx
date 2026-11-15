@@ -14,14 +14,13 @@ import { useI18n } from '@/context/locale-context';
 import api from '@/lib/api';
 import {
     activeProviderId,
-    connectedProviderIds,
-    hasMusicConnected,
-    isProviderConnected,
+    playbackProviderIds,
+    isPlaybackProviderConnected,
     providerFromUri,
     providerLabel,
     scoreProviderTrackMatch,
 } from '@/lib/music';
-import { playerTrackForProvider, songToPlayerTrack } from '@/lib/playable';
+import { playerTrackForProvider, rememberSongPlaybackProvider, songToPlayerTrack } from '@/lib/playable';
 import { toast } from '@/lib/toast';
 import { recordCompletedPlay } from '@/lib/favorite-suggest';
 import { getProvider, releaseProvider, type MusicProvider, type PlayableTrack, type ProviderPlaybackState } from '@/music';
@@ -121,6 +120,29 @@ function playbackUrisMatch(
         return false;
     }
     return candidates.some((uri) => uri.split(':').pop() === expectedId);
+}
+
+async function silenceProvider(provider: MusicProvider): Promise<void> {
+    try {
+        await provider.silence();
+    } catch {
+        // ignore
+    }
+}
+
+async function silenceOtherProviders(
+    providers: Map<MusicProviderId, MusicProvider>,
+    ownerId: MusicProviderId,
+): Promise<void> {
+    await Promise.all(
+        [...providers.values()]
+            .filter((provider) => provider.id !== ownerId)
+            .map((provider) => silenceProvider(provider)),
+    );
+}
+
+async function silenceAllProviders(providers: Map<MusicProviderId, MusicProvider>): Promise<void> {
+    await Promise.all([...providers.values()].map((provider) => silenceProvider(provider)));
 }
 
 function looksLikeNaturalEnd(options: {
@@ -290,9 +312,9 @@ function normalizeTrack(track: PlayerTrack): PlayerTrack {
 
 async function resolveFallbackTrack(
     track: PlayerTrack,
-    user: Parameters<typeof connectedProviderIds>[0],
+    user: Parameters<typeof playbackProviderIds>[0],
 ): Promise<PlayerTrack | null> {
-    const connected = connectedProviderIds(user);
+    const connected = playbackProviderIds(user);
     if (connected.length === 0) {
         return null;
     }
@@ -392,9 +414,11 @@ async function resolveFallbackTrack(
 export function PlayerProvider({ children }: { children: ReactNode }) {
     const { t } = useI18n();
     const { user } = useAuth();
-    const musicConnected = hasMusicConnected(user);
-    const providerId = activeProviderId(user);
-    const connectedIds = connectedProviderIds(user);
+    const connectedIds = playbackProviderIds(user);
+    const musicConnected = connectedIds.length > 0;
+    const rawActive = activeProviderId(user);
+    const providerId =
+        rawActive && connectedIds.includes(rawActive) ? rawActive : connectedIds[0] ?? null;
     const providerRef = useRef<MusicProvider | null>(null);
     const providersRef = useRef<Map<MusicProviderId, MusicProvider>>(new Map());
     const userRef = useRef(user);
@@ -444,9 +468,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         durationMs: number;
     } | null>(null);
     const playListenAnchorRef = useRef<{ at: number; baseMs: number; playing: boolean } | null>(null);
+    const playLockRef = useRef(Promise.resolve());
+    const listenerCleanupsRef = useRef(new Map<MusicProviderId, Array<() => void>>());
+    const applyStateRef = useRef<(state: ProviderPlaybackState | null) => void>(() => {});
 
     const [track, setTrack] = useState<PlayerTrack | null>(null);
-    const [providerReady, setProviderReady] = useState(false);
+    const [readyByProvider, setReadyByProvider] = useState<Partial<Record<MusicProviderId, boolean>>>({});
     const [playing, setPlaying] = useState(false);
     const [positionMs, setPositionMs] = useState(0);
     const [durationMs, setDurationMs] = useState(0);
@@ -489,7 +516,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return clock.originMs + (Date.now() - clock.originAt);
     }, []);
 
-    const ready = musicConnected && providerReady;
+    const ready =
+        musicConnected &&
+        (track ? Boolean(readyByProvider[track.provider]) : Object.values(readyByProvider).some(Boolean));
 
     useEffect(() => {
         volumeRef.current = volume;
@@ -662,13 +691,63 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
     }, [providerId, t, estimatedPositionMs, armPlaybackClock]);
 
+    applyStateRef.current = applyState;
+
+    const enqueuePlayback = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+        const run = playLockRef.current.then(fn, fn);
+        playLockRef.current = run.then(
+            () => undefined,
+            () => undefined,
+        );
+        return run;
+    }, []);
+
+    const attachProviderListeners = useCallback((provider: MusicProvider) => {
+        if (listenerCleanupsRef.current.has(provider.id)) {
+            return;
+        }
+        const offs = [
+            provider.onStateChange((state) => {
+                if (providerRef.current?.id === provider.id) {
+                    applyStateRef.current(state);
+                }
+            }),
+            provider.onReadyChange((isReady) => {
+                setReadyByProvider((prev) => ({ ...prev, [provider.id]: isReady }));
+                if (isReady && providerRef.current?.id === provider.id) {
+                    setError(null);
+                }
+            }),
+            provider.onError((message) => setError(message)),
+        ];
+        listenerCleanupsRef.current.set(provider.id, offs);
+    }, [setError]);
+
+    const detachProviderListeners = useCallback((id: MusicProviderId) => {
+        listenerCleanupsRef.current.get(id)?.forEach((fn) => fn());
+        listenerCleanupsRef.current.delete(id);
+    }, []);
+
+    const claimPlaybackOwner = useCallback(async (provider: MusicProvider) => {
+        providerRef.current = provider;
+        await silenceOtherProviders(providersRef.current, provider.id);
+        try {
+            await provider.setVolume(volumeRef.current);
+        } catch {
+            // ignore
+        }
+    }, []);
+
     useEffect(() => {
         if (!musicConnected || connectedIds.length === 0) {
             restoredRef.current = false;
-            [...providersRef.current.keys()].forEach((id) => releaseProvider(id));
+            [...providersRef.current.keys()].forEach((id) => {
+                detachProviderListeners(id);
+                releaseProvider(id);
+            });
             providersRef.current.clear();
             providerRef.current = null;
-            setProviderReady(false);
+            setReadyByProvider({});
             setPlaying(false);
             setTrack(null);
             commitQueue(null);
@@ -678,94 +757,89 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
 
         const activeSet = new Set(connectedIds);
-        const unsubscribers: Array<() => void> = [];
         let cancelled = false;
 
-        // Tear down providers that are no longer active+connected (stops TIDAL ping etc.).
+        // Tear down providers that are no longer active+connected.
         for (const id of [...providersRef.current.keys()]) {
             if (!activeSet.has(id)) {
+                detachProviderListeners(id);
                 releaseProvider(id);
                 providersRef.current.delete(id);
+                setReadyByProvider((prev) => {
+                    if (!(id in prev)) {
+                        return prev;
+                    }
+                    const next = { ...prev };
+                    delete next[id];
+                    return next;
+                });
                 if (providerRef.current?.id === id) {
                     providerRef.current = null;
                 }
             }
         }
 
+        const wired: MusicProvider[] = [];
+        for (const id of connectedIds) {
+            const provider = getProvider(id);
+            providersRef.current.set(id, provider);
+            attachProviderListeners(provider);
+            wired.push(provider);
+        }
+
         void (async () => {
-            const connected: MusicProvider[] = [];
-
-            // Eagerly initialize only the preferred active provider.
-            // Other active providers connect on demand in ensureProviderForTrack.
-            const eagerId =
-                (providerId && activeSet.has(providerId) ? providerId : null) ??
-                connectedIds[0] ??
-                null;
-
-            const idsToWire = eagerId ? [eagerId] : [];
-
-            for (const id of idsToWire) {
-                if (cancelled) {
-                    return;
-                }
-
-                const provider = getProvider(id);
-                providersRef.current.set(id, provider);
-
-                unsubscribers.push(
-                    provider.onStateChange((state) => {
-                        if (providerRef.current?.id === provider.id) {
-                            applyState(state);
-                        }
-                    }),
-                );
-                unsubscribers.push(
-                    provider.onReadyChange((isReady) => {
-                        if (providerRef.current?.id === provider.id) {
-                            setProviderReady(isReady);
-                            if (isReady) {
-                                setError(null);
+            await Promise.allSettled(
+                wired.map(async (provider) => {
+                    try {
+                        await provider.connect();
+                        if (!cancelled) {
+                            try {
+                                await provider.setVolume(volumeRef.current);
+                            } catch {
+                                // ignore
                             }
+                            setReadyByProvider((prev) => ({ ...prev, [provider.id]: provider.ready }));
                         }
-                    }),
-                );
-                unsubscribers.push(provider.onError((message) => setError(message)));
-
-                try {
-                    await provider.setVolume(volumeRef.current);
-                    await provider.connect();
-                    connected.push(provider);
-                } catch (e) {
-                    if (!cancelled) {
-                        const label = providerLabel(id);
-                        const message =
-                            e instanceof Error ? e.message : `${label}-Player konnte nicht gestartet werden.`;
-                        setError(`${label}: ${message}`);
+                    } catch (e) {
+                        if (!cancelled) {
+                            setReadyByProvider((prev) => ({ ...prev, [provider.id]: false }));
+                            const label = providerLabel(provider.id);
+                            const message =
+                                e instanceof Error ? e.message : `${label}-Player konnte nicht gestartet werden.`;
+                            setError(`${label}: ${message}`);
+                        }
                     }
-                }
-            }
+                }),
+            );
 
             if (cancelled) {
                 return;
             }
 
-            const preferred =
-                (eagerId && providersRef.current.get(eagerId)) ||
-                connected[0] ||
-                providersRef.current.values().next().value ||
+            const preferredId =
+                (providerId && activeSet.has(providerId) ? providerId : null) ??
+                connectedIds[0] ??
                 null;
-            providerRef.current = preferred ?? null;
-            setProviderReady(Boolean(preferred?.ready));
+            const preferred =
+                (preferredId && providersRef.current.get(preferredId)) ||
+                wired.find((provider) => provider.ready) ||
+                wired[0] ||
+                null;
+            if (!providerRef.current || !activeSet.has(providerRef.current.id)) {
+                providerRef.current = preferred ?? null;
+            }
         })();
 
         return () => {
             cancelled = true;
-            unsubscribers.forEach((fn) => fn());
-            // Keep active provider instances across StrictMode remounts; only release
+            for (const id of connectedIds) {
+                detachProviderListeners(id);
+            }
+            // Keep provider instances across StrictMode remounts; only release
             // when the effect re-runs with an empty connected set or inactive ids.
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [musicConnected, connectedIds.join(','), providerId, applyState]);
+    }, [musicConnected, connectedIds.join(','), providerId, attachProviderListeners, detachProviderListeners, setError]);
 
     useEffect(() => {
         const timer = window.setInterval(() => {
@@ -787,7 +861,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
         let needed = playable.provider;
 
-        if (!isProviderConnected(userRef.current, needed)) {
+        if (!isPlaybackProviderConnected(userRef.current, needed)) {
             const fallback = await resolveFallbackTrack(playable, userRef.current);
             if (!fallback) {
                 throw new Error(t('player.providerInactive', { provider: providerLabel(needed) }));
@@ -800,38 +874,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         if (!provider) {
             provider = getProvider(needed);
             providersRef.current.set(needed, provider);
-            provider.onStateChange((state) => {
-                if (providerRef.current?.id === provider!.id) {
-                    applyState(state);
-                }
-            });
-            provider.onReadyChange((isReady) => {
-                if (providerRef.current?.id === provider!.id) {
-                    setProviderReady(isReady);
-                }
-            });
-            provider.onError((message) => setError(message));
-            await provider.setVolume(volumeRef.current);
+            attachProviderListeners(provider);
             await provider.connect();
         }
-
-        if (providerRef.current && providerRef.current.id !== needed) {
-            try {
-                await providerRef.current.pause();
-            } catch {
-                // ignore
-            }
-        }
-
-        providerRef.current = provider;
-        setProviderReady(provider.ready);
 
         if (!provider.ready) {
             await provider.connect();
         }
 
+        await claimPlaybackOwner(provider);
+        setReadyByProvider((prev) => ({ ...prev, [provider.id]: provider.ready }));
+
         return { provider, track: playable };
-    }, [applyState, t]);
+    }, [attachProviderListeners, claimPlaybackOwner, t]);
 
     const currentListenedMs = useCallback((): number => {
         const active = activePlayRef.current;
@@ -907,8 +962,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         [currentListenedMs],
     );
 
-    const playEngine = useCallback(async (next: PlayerTrack, startAt: number) => {
-        const { provider, track: playable } = await ensureProviderForTrack(next);
+    const playEngine = useCallback(async (next: PlayerTrack, startAt: number, epoch: number) => {
+        let { provider, track: playable } = await ensureProviderForTrack(next);
+
+        if (playbackEpochRef.current !== epoch) {
+            await silenceProvider(provider);
+            return;
+        }
 
         const trackPlay = Boolean(playable.songId) && !syncingRemoteRef.current;
         const isFreshStart = startAt < 2500;
@@ -927,6 +987,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             await flushPlayProgress({ clear: true });
         }
 
+        if (playbackEpochRef.current !== epoch) {
+            await silenceProvider(provider);
+            return;
+        }
+
         trackRef.current = playable;
         setTrack(playable);
         const seededDuration =
@@ -943,7 +1008,31 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             resumeGuardRef.current = null;
         }
 
-        await provider.play(playable, startAt);
+        try {
+            await provider.play(playable, startAt);
+        } catch (err) {
+            const fallback = await resolveFallbackTrack(playable, userRef.current);
+            if (!fallback) {
+                throw err;
+            }
+            await silenceProvider(provider);
+            const switched = await ensureProviderForTrack(fallback);
+            provider = switched.provider;
+            playable = switched.track;
+            if (playbackEpochRef.current !== epoch) {
+                await silenceProvider(provider);
+                return;
+            }
+            trackRef.current = playable;
+            setTrack(playable);
+            setError(null);
+            await provider.play(playable, startAt);
+        }
+
+        if (playbackEpochRef.current !== epoch) {
+            await silenceProvider(provider);
+            return;
+        }
 
         if (trackPlay && playable.songId) {
             if (isFreshStart || !activePlayRef.current || activePlayRef.current.songId !== playable.songId) {
@@ -1009,7 +1098,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                     // non-blocking
                 });
         }
-    }, [ensureProviderForTrack, flushPlayProgress, currentListenedMs]);
+    }, [ensureProviderForTrack, flushPlayProgress, currentListenedMs, setError]);
 
     const playTrackInternal = useCallback(
         async (next: PlayerTrack, options?: { startPositionMs?: number }) => {
@@ -1024,61 +1113,76 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 return;
             }
 
-            const startAt = Math.max(0, Math.floor(options?.startPositionMs ?? 0));
+            await enqueuePlayback(async () => {
+                const startAt = Math.max(0, Math.floor(options?.startPositionMs ?? 0));
 
-            // Cancel any pending auto-advance from the previous track (e.g. click in last second).
-            playbackEpochRef.current += 1;
-            advancingRef.current = false;
-            ignoreEndedUntilRef.current = Date.now() + 2000;
-            liveDurationRef.current = false;
-            userPausedRef.current = false;
-            providerPausedAtRef.current = null;
-            maxPositionRef.current = startAt;
-            armPlaybackClock(normalized.uri, startAt);
-            lastAppliedStateRef.current = {
-                uri: normalized.uri,
-                position: startAt,
-                paused: false,
-                duration: normalized.durationMs && normalized.durationMs > 0 ? Math.floor(normalized.durationMs) : 0,
-            };
+                // Cancel any pending auto-advance from the previous track (e.g. click in last second).
+                playbackEpochRef.current += 1;
+                const epoch = playbackEpochRef.current;
+                advancingRef.current = false;
+                ignoreEndedUntilRef.current = Date.now() + 2000;
+                liveDurationRef.current = false;
+                userPausedRef.current = false;
+                providerPausedAtRef.current = null;
+                maxPositionRef.current = startAt;
+                armPlaybackClock(normalized.uri, startAt);
+                lastAppliedStateRef.current = {
+                    uri: normalized.uri,
+                    position: startAt,
+                    paused: false,
+                    duration: normalized.durationMs && normalized.durationMs > 0 ? Math.floor(normalized.durationMs) : 0,
+                };
 
-            trackRef.current = normalized;
-            setTrack(normalized);
-            setError(null);
-            setPlaying(true);
-            positionAnchorRef.current = { position: startAt, at: Date.now(), playing: true };
-            setPositionMs(startAt);
-            if (startAt === 0) {
-                const seeded =
-                    normalized.durationMs && normalized.durationMs > 0
-                        ? Math.floor(normalized.durationMs)
-                        : 0;
-                setDurationMs(seeded);
-                durationMsRef.current = seeded;
-            }
-
-            try {
-                await playEngine(normalized, startAt);
-
+                trackRef.current = normalized;
+                setTrack(normalized);
+                setError(null);
                 setPlaying(true);
                 positionAnchorRef.current = { position: startAt, at: Date.now(), playing: true };
                 setPositionMs(startAt);
-            } catch (err) {
-                resumeGuardRef.current = null;
-                let message = t('player.playbackFailed');
-                if (axios.isAxiosError(err)) {
-                    const data = err.response?.data as
-                        | { message?: string; errors?: Record<string, string[]> }
-                        | undefined;
-                    const firstError = data?.errors ? Object.values(data.errors)[0]?.[0] : undefined;
-                    message = firstError || data?.message || message;
-                } else if (err instanceof Error && err.message) {
-                    message = err.message;
+                if (startAt === 0) {
+                    const seeded =
+                        normalized.durationMs && normalized.durationMs > 0
+                            ? Math.floor(normalized.durationMs)
+                            : 0;
+                    setDurationMs(seeded);
+                    durationMsRef.current = seeded;
                 }
-                setError(message);
-            }
+
+                try {
+                    await playEngine(normalized, startAt, epoch);
+                    if (playbackEpochRef.current !== epoch) {
+                        return;
+                    }
+
+                    setPlaying(true);
+                    positionAnchorRef.current = { position: startAt, at: Date.now(), playing: true };
+                    setPositionMs(startAt);
+                } catch (err) {
+                    if (playbackEpochRef.current !== epoch) {
+                        return;
+                    }
+                    resumeGuardRef.current = null;
+                    let message = t('player.playbackFailed');
+                    if (axios.isAxiosError(err)) {
+                        const data = err.response?.data as
+                            | { message?: string; errors?: Record<string, string[]> }
+                            | undefined;
+                        const firstError = data?.errors ? Object.values(data.errors)[0]?.[0] : undefined;
+                        message = firstError || data?.message || message;
+                    } else if (err instanceof Error && err.message) {
+                        message = err.message;
+                    }
+                    setError(message);
+                    setPlaying(false);
+                    positionAnchorRef.current = {
+                        position: positionMsRef.current,
+                        at: Date.now(),
+                        playing: false,
+                    };
+                }
+            });
         },
-        [musicConnected, playEngine, setError, t, armPlaybackClock],
+        [musicConnected, playEngine, setError, t, armPlaybackClock, enqueuePlayback],
     );
 
     const playAtCursor = useCallback(
@@ -1486,9 +1590,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 return;
             }
 
-            if (!isProviderConnected(userRef.current, provider)) {
+            if (!isPlaybackProviderConnected(userRef.current, provider)) {
                 setError(t('player.providerInactive', { provider: providerLabel(provider) }));
                 return;
+            }
+
+            if (current.songId) {
+                rememberSongPlaybackProvider(current.songId, provider);
             }
 
             await playTrackInternal(next, { startPositionMs: positionMsRef.current });
@@ -1541,46 +1649,52 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 return;
             }
 
-            if (resumeAt > 1500 && Math.abs(statePosition - resumeAt) > 1500) {
-                resumeGuardRef.current = {
-                    until: Date.now() + 2500,
-                    minPosition: resumeAt,
-                };
-                await provider.seek(resumeAt);
-                positionAnchorRef.current = { position: resumeAt, at: Date.now(), playing: true };
-                setPositionMs(resumeAt);
-            }
+            await enqueuePlayback(async () => {
+                await claimPlaybackOwner(provider);
 
-            await provider.resume();
-            userPausedRef.current = false;
-            providerPausedAtRef.current = null;
-            armPlaybackClock(track.uri, resumeAt > 0 ? resumeAt : statePosition);
-            setPlaying(true);
-            positionAnchorRef.current = {
-                position: resumeAt > 0 ? resumeAt : positionAnchorRef.current.position || statePosition,
-                at: Date.now(),
-                playing: true,
-            };
+                if (resumeAt > 1500 && Math.abs(statePosition - resumeAt) > 1500) {
+                    resumeGuardRef.current = {
+                        until: Date.now() + 2500,
+                        minPosition: resumeAt,
+                    };
+                    await provider.seek(resumeAt);
+                    positionAnchorRef.current = { position: resumeAt, at: Date.now(), playing: true };
+                    setPositionMs(resumeAt);
+                }
+
+                await provider.resume();
+                userPausedRef.current = false;
+                providerPausedAtRef.current = null;
+                armPlaybackClock(track.uri, resumeAt > 0 ? resumeAt : statePosition);
+                setPlaying(true);
+                positionAnchorRef.current = {
+                    position: resumeAt > 0 ? resumeAt : positionAnchorRef.current.position || statePosition,
+                    at: Date.now(),
+                    playing: true,
+                };
+            });
             return;
         }
 
         if (playing) {
-            await provider.pause();
-            const pausedAt = positionMsRef.current || positionMs;
-            userPausedRef.current = true;
-            providerPausedAtRef.current = null;
-            if (track) {
-                armPlaybackClock(track.uri, pausedAt);
-            }
-            setPlaying(false);
-            positionAnchorRef.current = {
-                position: pausedAt,
-                at: Date.now(),
-                playing: false,
-            };
-            setPositionMs(pausedAt);
+            await enqueuePlayback(async () => {
+                await provider.pause();
+                const pausedAt = positionMsRef.current || positionMs;
+                userPausedRef.current = true;
+                providerPausedAtRef.current = null;
+                if (track) {
+                    armPlaybackClock(track.uri, pausedAt);
+                }
+                setPlaying(false);
+                positionAnchorRef.current = {
+                    position: pausedAt,
+                    at: Date.now(),
+                    playing: false,
+                };
+                setPositionMs(pausedAt);
+            });
         }
-    }, [playing, track, playTrackInternal, positionMs, controlsLocked, armPlaybackClock]);
+    }, [playing, track, playTrackInternal, positionMs, controlsLocked, armPlaybackClock, enqueuePlayback, claimPlaybackOwner]);
 
     const seek = useCallback(async (nextPositionMs: number) => {
         if (controlsLocked) {
@@ -1738,9 +1852,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             const provider = providerRef.current;
 
             if (!payload.uri) {
-                if (provider && playing) {
-                    await provider.pause();
-                }
+                await silenceAllProviders(providersRef.current);
                 setPlaying(false);
                 setPositionMs(0);
                 positionAnchorRef.current = { position: 0, at: Date.now(), playing: false };
@@ -1770,7 +1882,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                     commitQueue(null);
                     await playTrackInternal(nextTrack, { startPositionMs: targetPos });
                     if (!payload.isPlaying) {
-                        await provider?.pause();
+                        await providerRef.current?.pause();
                         setPlaying(false);
                         positionAnchorRef.current = { position: targetPos, at: Date.now(), playing: false };
                         setPositionMs(targetPos);
@@ -2047,35 +2159,31 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const canNext = Boolean(queue && queue.tracks.length > 0) && !controlsLocked;
 
     const clearPlayback = useCallback(async () => {
-        await flushPlayProgress({ clear: true });
-        const provider = providerRef.current;
-        if (provider) {
+        await enqueuePlayback(async () => {
+            playbackEpochRef.current += 1;
+            await flushPlayProgress({ clear: true });
+            await silenceAllProviders(providersRef.current);
+            setPlaying(false);
+            setTrack(null);
+            commitQueue(null);
+            setPositionMs(0);
+            setDurationMs(0);
+            setError(null);
+            positionAnchorRef.current = { position: 0, at: Date.now(), playing: false };
+            activePlayRef.current = null;
+            playListenAnchorRef.current = null;
+            lastAppliedStateRef.current = null;
+            userPausedRef.current = false;
+            providerPausedAtRef.current = null;
+            playbackClockRef.current = null;
+            maxPositionRef.current = 0;
             try {
-                await provider.pause();
+                localStorage.removeItem(SESSION_STORAGE_KEY);
             } catch {
                 // ignore
             }
-        }
-        setPlaying(false);
-        setTrack(null);
-        commitQueue(null);
-        setPositionMs(0);
-        setDurationMs(0);
-        setError(null);
-        positionAnchorRef.current = { position: 0, at: Date.now(), playing: false };
-        activePlayRef.current = null;
-        playListenAnchorRef.current = null;
-        lastAppliedStateRef.current = null;
-        userPausedRef.current = false;
-        providerPausedAtRef.current = null;
-        playbackClockRef.current = null;
-        maxPositionRef.current = 0;
-        try {
-            localStorage.removeItem(SESSION_STORAGE_KEY);
-        } catch {
-            // ignore
-        }
-    }, [flushPlayProgress, commitQueue]);
+        });
+    }, [flushPlayProgress, commitQueue, enqueuePlayback]);
 
     const value = useMemo(
         () => ({

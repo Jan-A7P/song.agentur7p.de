@@ -12,8 +12,9 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { ArtistLinks } from '@/components/ArtistLinks';
 import { AppTooltip } from '@/components/ui/tooltip';
-import { hasMusicConnected, isProviderConnected } from '@/lib/music';
-import { songToPlayerTrack } from '@/lib/playable';
+import { hasPlaybackConnected, isProviderConnected } from '@/lib/music';
+import { songProviderLinks, songToPlayerTrack } from '@/lib/playable';
+import { SongProviderBadges } from '@/components/SongPlayButton';
 import { emitFavoriteChange } from '@/lib/favorite-sync';
 import { invalidateSongListCache } from '@/lib/song-list-cache';
 
@@ -133,7 +134,7 @@ export function DiscoverPage() {
         if (!card) {
             return;
         }
-        if (!hasMusicConnected(user)) {
+        if (!hasPlaybackConnected(user)) {
             navigate('/settings');
             return;
         }
@@ -468,7 +469,7 @@ export function DiscoverPage() {
                                     )}
                                 </div>
 
-                                <div className="flex items-start justify-between gap-3 border-t border-line bg-paper px-4 py-2.5">
+                                    <div className="flex items-start justify-between gap-3 border-t border-line bg-paper px-4 py-2.5">
                                     <div className="min-w-0">
                                         <h2 className="truncate font-display text-lg font-semibold leading-tight tracking-tight sm:text-xl">
                                             {cardTitle(current)}
@@ -480,6 +481,19 @@ export function DiscoverPage() {
                                                 cardArtist(current)
                                             )}
                                         </p>
+                                        {current.song && songProviderLinks(current.song).length > 1 && (
+                                            <div
+                                                className="mt-2"
+                                                onPointerDown={(event) => event.stopPropagation()}
+                                                onClick={(event) => event.stopPropagation()}
+                                            >
+                                                <SongProviderBadges
+                                                    song={current.song}
+                                                    className="justify-start"
+                                                    playTrackOptions={{ radio: false }}
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                     {current.source === 'spotify' && (
                                         <Badge className="mt-0.5 shrink-0 border-accent/20 bg-accent/10 text-accent">

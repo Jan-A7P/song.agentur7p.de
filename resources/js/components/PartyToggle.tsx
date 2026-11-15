@@ -3,7 +3,7 @@ import { Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppTooltip } from '@/components/ui/tooltip';
 import { useI18n } from '@/context/locale-context';
-import { isPartyModeEnabled, setPartyModeEnabled, subscribePartyMode } from '@/lib/party-mode';
+import { isPartyModeEnabled, PARTY_MODE_VISIBLE, setPartyModeEnabled, subscribePartyMode } from '@/lib/party-mode';
 import { cn } from '@/lib/utils';
 
 export function PartyToggle() {
@@ -11,6 +11,10 @@ export function PartyToggle() {
     const [enabled, setEnabled] = useState(isPartyModeEnabled);
 
     useEffect(() => subscribePartyMode(setEnabled), []);
+
+    if (!PARTY_MODE_VISIBLE) {
+        return null;
+    }
 
     const label = enabled ? t('party.off') : t('party.on');
 

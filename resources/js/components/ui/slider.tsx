@@ -163,24 +163,19 @@ export function Slider({
                 )}
             >
                 <div
-                    className={cn(
-                        'absolute inset-y-0 left-0 rounded-full transition-[width] duration-75 ease-out',
-                        isVolume
-                            ? 'bg-gradient-to-r from-ink/70 to-ink'
-                            : 'bg-gradient-to-r from-accent to-accent-soft',
-                    )}
+                    className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-accent to-accent-soft transition-[width] duration-75 ease-out"
                     style={{ width: `${percent}%` }}
                 />
             </div>
 
             <div
                 className={cn(
-                    'pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-paper shadow-[0_1px_4px_rgba(26,23,20,0.28),0_0_0_1px_rgba(26,23,20,0.12)] ring-1 ring-line transition-transform duration-150 ease-out dark:shadow-[0_1px_4px_rgba(0,0,0,0.5)]',
+                    'pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent ring-2 ring-accent-soft transition-transform duration-150 ease-out',
                     isVolume ? 'h-3 w-3' : 'h-3.5 w-3.5',
                     active ? 'scale-125' : 'scale-100',
                     !active && !dragging && 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100',
                     (active || dragging) && 'opacity-100',
-                    'group-focus-visible:ring-2 group-focus-visible:ring-accent/35 group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-paper',
+                    'group-focus-visible:ring-accent',
                 )}
                 style={{ left: `${percent}%` }}
             />

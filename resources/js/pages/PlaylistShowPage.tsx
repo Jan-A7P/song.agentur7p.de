@@ -17,19 +17,19 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Check, GripVertical, ListPlus, Loader2, Pause, Play, Search, Shuffle, Trash2 } from 'lucide-react';
+import { Check, GripVertical, ListPlus, Loader2, Play, Search, Shuffle, Trash2 } from 'lucide-react';
 import api from '@/lib/api';
 import type { Paginated, Playlist, Song } from '@/types';
 import { useAuth } from '@/context/auth-context';
 import { usePlayer, type PlayerTrack } from '@/context/player-context';
-import { hasMusicConnected, providerLabel } from '@/lib/music';
-import { songIsPlayable, songProviderLinks, songToPlayerTrack } from '@/lib/playable';
+import { hasPlaybackConnected } from '@/lib/music';
+import { songIsPlayable, songMatchesTrack, songToPlayerTrack } from '@/lib/playable';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Alert } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { AppTooltip } from '@/components/ui/tooltip';
 import { FavoriteButton } from '@/components/FavoriteButton';
+import { SongPlayButton, SongProviderBadges } from '@/components/SongPlayButton';
 import {
     Dialog,
     DialogBody,
@@ -50,16 +50,14 @@ function SortableSongRow({
     song,
     isOwner,
     isCurrent,
-    isPlayingHere,
-    onPlay,
+    onPlayTrack,
     onRemove,
     onFavoriteChange,
 }: {
     song: Song;
     isOwner: boolean;
     isCurrent: boolean;
-    isPlayingHere: boolean;
-    onPlay: () => void;
+    onPlayTrack: (track: PlayerTrack) => void | Promise<void>;
     onRemove: () => void;
     onFavoriteChange: (favorited: boolean) => void;
 }) {
@@ -119,19 +117,7 @@ function SortableSongRow({
                 </p>
             </div>
 
-            <div className="hidden flex-wrap justify-end gap-1 sm:flex">
-                {songProviderLinks(song).map((link) => (
-                    <Badge
-                        key={link.provider}
-                        className={cn(
-                            link.provider === (song.preferred_provider ?? song.provider) &&
-                                'border-accent/20 bg-accent/10 text-accent',
-                        )}
-                    >
-                        {providerLabel(link.provider)}
-                    </Badge>
-                ))}
-            </div>
+            <SongProviderBadges song={song} className="hidden sm:flex" onPlayTrack={onPlayTrack} />
 
             <FavoriteButton
                 songId={song.id}
@@ -139,19 +125,7 @@ function SortableSongRow({
                 onChange={onFavoriteChange}
             />
 
-            {songIsPlayable(song) && (
-                <AppTooltip label={isPlayingHere ? t('common.pause') : t('common.play')}>
-                    <Button
-                        type="button"
-                        variant="accent"
-                        size="icon"
-                        onClick={onPlay}
-                        aria-label={isPlayingHere ? t('common.pause') : t('common.play')}
-                    >
-                        {isPlayingHere ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                    </Button>
-                </AppTooltip>
-            )}
+            <SongPlayButton song={song} onPlayTrack={onPlayTrack} />
 
             {isOwner && (
                 <AppTooltip label={t('playlists.remove')}>
@@ -174,7 +148,7 @@ export function PlaylistShowPage() {
     const { id } = useParams();
     const location = useLocation();
     const { user } = useAuth();
-    const { track, playing, playTrack, playPlaylist, toggle, shuffle, syncPlaylistQueue } = usePlayer();
+    const { track, playTrack, playPlaylist, shuffle, syncPlaylistQueue } = usePlayer();
     const navigate = useNavigate();
     const { t } = useI18n();
     const [playlist, setPlaylist] = useState<Playlist | null>(null);
@@ -380,39 +354,37 @@ export function PlaylistShowPage() {
             navigate('/login');
             return false;
         }
-        if (!hasMusicConnected(user)) {
+        if (!hasPlaybackConnected(user)) {
             navigate('/settings');
             return false;
         }
         return true;
     };
 
-    const onPlaySong = async (song: Song) => {
+    const onPlaySong = async (song: Song, chosen?: PlayerTrack) => {
         if (!songIsPlayable(song) || !ensureAuthForPlay()) {
             return;
         }
 
-        const playable = toPlayerTracks(songs, user);
-        if (playable.length > 1) {
-            const startIndex = playable.findIndex((item) => item.songId === song.id);
-            await playPlaylist(playable, {
+        const selected = chosen ?? songToPlayerTrack(song, user);
+        if (!selected) {
+            return;
+        }
+
+        const queue = toPlayerTracks(songs, user).map((item) =>
+            item.songId === song.id ? selected : item,
+        );
+
+        if (queue.length > 1) {
+            const startIndex = queue.findIndex((item) => item.songId === song.id);
+            await playPlaylist(queue, {
                 playlistId: playlist?.id,
                 startIndex: startIndex >= 0 ? startIndex : 0,
             });
             return;
         }
 
-        const single = songToPlayerTrack(song, user);
-        if (!single) {
-            return;
-        }
-
-        if (track?.songId === song.id || track?.uri === single.uri) {
-            await toggle();
-            return;
-        }
-
-        await playTrack(single);
+        await playTrack(selected);
     };
 
     const onPlayAll = async (withShuffle = false) => {
@@ -615,18 +587,14 @@ export function PlaylistShowPage() {
                     <SortableContext items={songIds} strategy={verticalListSortingStrategy}>
                         <ul className="space-y-2">
                             {songs.map((song) => {
-                                const isCurrent = Boolean(
-                                    track?.songId === song.id ||
-                                        songProviderLinks(song).some((l) => l.provider_uri === track?.uri),
-                                );
+                                const isCurrent = songMatchesTrack(song, track);
                                 return (
                                 <SortableSongRow
                                     key={song.id}
                                     song={song}
                                     isOwner={isOwner}
                                     isCurrent={isCurrent}
-                                    isPlayingHere={isCurrent && playing}
-                                    onPlay={() => void onPlaySong(song)}
+                                    onPlayTrack={(next) => void onPlaySong(song, next)}
                                     onRemove={() => void removeSong(song.id)}
                                     onFavoriteChange={(favorited) =>
                                         setSongs((prev) =>

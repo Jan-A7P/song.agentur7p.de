@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { isPartyModeEnabled, subscribePartyMode } from '@/lib/party-mode';
+import { isPartyModeEnabled, PARTY_MODE_VISIBLE, subscribePartyMode } from '@/lib/party-mode';
 
 export function PartyLights() {
     const [enabled, setEnabled] = useState(isPartyModeEnabled);
 
     useEffect(() => subscribePartyMode(setEnabled), []);
 
-    if (!enabled) {
+    if (!PARTY_MODE_VISIBLE || !enabled) {
         return null;
     }
 

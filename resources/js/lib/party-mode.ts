@@ -1,5 +1,8 @@
 const STORAGE_KEY = 'songtexte.partyMode';
 
+/** Party mode UI and effects are hidden for now; logic is kept. */
+export const PARTY_MODE_VISIBLE = false;
+
 type PartyListener = (enabled: boolean) => void;
 
 const listeners = new Set<PartyListener>();
@@ -16,7 +19,7 @@ export function applyPartyModeClass(enabled: boolean): void {
     if (typeof document === 'undefined') {
         return;
     }
-    document.documentElement.classList.toggle('party', enabled);
+    document.documentElement.classList.toggle('party', PARTY_MODE_VISIBLE && enabled);
 }
 
 export function isPartyModeEnabled(): boolean {

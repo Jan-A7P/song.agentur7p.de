@@ -95,11 +95,27 @@ class MusicController extends Controller
             ], 400);
         }
 
+        $user = $request->user()->fresh();
+        $connection = null;
+        try {
+            $connection = $this->connections->get(
+                $user,
+                MusicProvider::from($adapter->id()),
+            );
+        } catch (InvalidArgumentException) {
+            $connection = null;
+        }
+
+        $expiresAt = $connection?->token_expires_at;
+
         return response()->json([
             'access_token' => $accessToken,
+            'refresh_token' => $connection?->refresh_token,
             'provider' => $adapter->id(),
             'connected' => true,
             'client_id' => $adapter->clientId(),
+            'user_id' => $connection?->external_user_id,
+            'expires_at' => $expiresAt ? $expiresAt->getTimestamp() * 1000 : null,
         ]);
     }
 

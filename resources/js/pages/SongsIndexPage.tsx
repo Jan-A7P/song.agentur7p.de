@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '@/lib/api';
 import type { Paginated, Song } from '@/types';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { AppTooltip } from '@/components/ui/tooltip';
 import { FavoriteButton } from '@/components/FavoriteButton';
+import { SongPlayButton, SongProviderBadges } from '@/components/SongPlayButton';
 import { useAuth } from '@/context/auth-context';
 import { usePlayer } from '@/context/player-context';
-import { hasMusicConnected, providerLabel } from '@/lib/music';
 import { Alert } from '@/components/ui/alert';
-import { songIsPlayable, songProviderLinks, songToPlayerTrack } from '@/lib/playable';
+import { songIsPlayable, songMatchesTrack } from '@/lib/playable';
 import { getSongListCache, setSongListCache, subscribeSongListInvalidation, type SongListFilter } from '@/lib/song-list-cache';
 import { subscribeFavoriteChange } from '@/lib/favorite-sync';
 import { SongListSkeleton } from '@/components/skeletons';
@@ -23,7 +22,7 @@ type ListFilter = SongListFilter;
 
 export function SongsIndexPage() {
     const { user, refreshUser } = useAuth();
-    const { track, playing, playTrack, toggle } = usePlayer();
+    const { track } = usePlayer();
     const { t } = useI18n();
     const initial = getSongListCache('all');
     const [songs, setSongs] = useState<Song[]>(() => initial?.songs ?? []);
@@ -135,35 +134,6 @@ export function SongsIndexPage() {
         void loadPage(nextPage);
     };
 
-    const onPlaySong = async (song: Song, e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const playable = songToPlayerTrack(song, user);
-        if (!playable) {
-            return;
-        }
-
-        if (!user) {
-            window.location.href = '/login';
-            return;
-        }
-
-        if (!hasMusicConnected(user)) {
-            window.location.href = '/settings';
-            return;
-        }
-
-        const isCurrent = track?.songId === song.id || track?.uri === playable.uri;
-
-        if (isCurrent) {
-            await toggle();
-            return;
-        }
-
-        await playTrack(playable);
-    };
-
     const onFavoriteChange = (songId: string, favorited: boolean) => {
         setSongs((prev) => {
             if (filter === 'favorites' && !favorited) {
@@ -230,12 +200,7 @@ export function SongsIndexPage() {
                     <ul className="divide-y divide-line border-y border-line">
                         {songs.map((song) => {
                             const playable = songIsPlayable(song);
-                            const links = songProviderLinks(song);
-                            const preferred = song.preferred_provider ?? song.provider;
-                            const isCurrent = Boolean(
-                                track?.songId === song.id || links.some((l) => l.provider_uri === track?.uri),
-                            );
-                            const isPlayingHere = isCurrent && playing;
+                            const isCurrent = songMatchesTrack(song, track);
 
                             return (
                                 <li key={song.id}>
@@ -281,34 +246,8 @@ export function SongsIndexPage() {
                                         />
                                         {playable && (
                                             <>
-                                                <div className="hidden flex-wrap justify-end gap-1 sm:flex">
-                                                    {links.map((link) => (
-                                                        <Badge
-                                                            key={link.provider}
-                                                            className={cn(
-                                                                link.provider === preferred &&
-                                                                    'border-accent/20 bg-accent/10 text-accent',
-                                                            )}
-                                                        >
-                                                            {providerLabel(link.provider)}
-                                                        </Badge>
-                                                    ))}
-                                                </div>
-                                                <AppTooltip label={isPlayingHere ? t('common.pause') : t('common.play')}>
-                                                    <Button
-                                                        type="button"
-                                                        variant="accent"
-                                                        size="icon"
-                                                        aria-label={isPlayingHere ? t('common.pause') : t('common.play')}
-                                                        onClick={(e) => void onPlaySong(song, e)}
-                                                    >
-                                                        {isPlayingHere ? (
-                                                            <Pause className="h-4 w-4" />
-                                                        ) : (
-                                                            <Play className="h-4 w-4" />
-                                                        )}
-                                                    </Button>
-                                                </AppTooltip>
+                                                <SongProviderBadges song={song} className="hidden sm:flex" />
+                                                <SongPlayButton song={song} />
                                             </>
                                         )}
                                     </div>

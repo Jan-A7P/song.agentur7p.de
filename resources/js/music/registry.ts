@@ -16,18 +16,17 @@ export function getProvider(id: MusicProviderId): MusicProvider {
             provider = new SpotifyProvider();
             break;
         case 'tidal':
-            // Class construction is cheap; the TIDAL Player SDK loads only on connect().
             provider = new TidalProvider();
             break;
         default:
-            throw new Error(`Unbekannter Musik-Anbieter: ${id as string}`);
+            throw new Error(`Kein Wiedergabe-Player für ${id as string}.`);
     }
 
     instances.set(id, provider);
     return provider;
 }
 
-/** Disconnect and drop the singleton so inactive providers stop all SDK activity. */
+/** Disconnect and drop the singleton so inactive providers stop all playback. */
 export function releaseProvider(id: MusicProviderId): void {
     const provider = instances.get(id);
     if (!provider) {

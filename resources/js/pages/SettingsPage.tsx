@@ -8,13 +8,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { providerConnectUrl, providerLabel } from '@/lib/music';
+import { providerConnectUrl, providerLabel, providerSupportsPlayback } from '@/lib/music';
 import {
     isFavoriteSuggestEnabled,
     setFavoriteSuggestEnabled,
 } from '@/lib/favorite-suggest';
-import { isPartyModeEnabled, setPartyModeEnabled, subscribePartyMode } from '@/lib/party-mode';
+import { isPartyModeEnabled, PARTY_MODE_VISIBLE, setPartyModeEnabled, subscribePartyMode } from '@/lib/party-mode';
+import { isCarmineModeEnabled, setCarmineModeEnabled, subscribeCarmineMode } from '@/lib/carmine-mode';
 import { SettingsSkeleton } from '@/components/skeletons';
+import { AccentColorControls } from '@/components/AccentColorPicker';
 import type { MusicProviderId } from '@/music/types';
 import type { MusicConnectionStatus, User } from '@/types';
 
@@ -48,8 +50,10 @@ export function SettingsPage() {
     const [busy, setBusy] = useState<string | null>(null);
     const [favoriteSuggest, setFavoriteSuggest] = useState(() => isFavoriteSuggestEnabled());
     const [partyMode, setPartyMode] = useState(() => isPartyModeEnabled());
+    const [carmineMode, setCarmineMode] = useState(() => isCarmineModeEnabled());
 
     useEffect(() => subscribePartyMode(setPartyMode), []);
+    useEffect(() => subscribeCarmineMode(setCarmineMode), []);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -194,77 +198,8 @@ export function SettingsPage() {
                 </p>
             </div>
 
-            <section className="space-y-3">
-                <h2 className="text-lg font-medium">{t('language.label')}</h2>
-                <p className="text-sm text-muted">{t('language.description')}</p>
-                <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                        type="button"
-                        variant={locale === 'de' ? 'accent' : 'outline'}
-                        onClick={() => setLocale('de')}
-                    >
-                        {t('language.de')}
-                    </Button>
-                    <Button
-                        type="button"
-                        variant={locale === 'en' ? 'accent' : 'outline'}
-                        onClick={() => setLocale('en')}
-                    >
-                        {t('language.en')}
-                    </Button>
-                </div>
-            </section>
-
             {flash && <Alert variant="success">{flash}</Alert>}
             {error && <Alert variant="error">{error}</Alert>}
-
-            <section className="space-y-3">
-                <h2 className="text-lg font-medium">{t('settings.playback')}</h2>
-                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-3">
-                    <div className="min-w-0 flex-1">
-                        <p className="font-medium">{t('settings.favoriteSuggest')}</p>
-                        <p className="mt-1 text-sm text-muted">
-                            {t('settings.favoriteSuggestBody')}
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Label htmlFor="favorite-suggest" className="text-sm text-muted">
-                            {t('common.active')}
-                        </Label>
-                        <Switch
-                            id="favorite-suggest"
-                            checked={favoriteSuggest}
-                            aria-label={t('settings.favoriteSuggestAria')}
-                            onCheckedChange={(next) => {
-                                setFavoriteSuggest(next);
-                                setFavoriteSuggestEnabled(next);
-                            }}
-                        />
-                    </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-3">
-                    <div className="min-w-0 flex-1">
-                        <p className="font-medium">{t('settings.party')}</p>
-                        <p className="mt-1 text-sm text-muted">
-                            {t('settings.partyBody')}
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Label htmlFor="party-mode" className="text-sm text-muted">
-                            {t('common.active')}
-                        </Label>
-                        <Switch
-                            id="party-mode"
-                            checked={partyMode}
-                            aria-label={t('settings.partyAria')}
-                            onCheckedChange={(next) => {
-                                setPartyMode(next);
-                                setPartyModeEnabled(next);
-                            }}
-                        />
-                    </div>
-                </div>
-            </section>
 
             <section className="space-y-3">
                 <h2 className="text-lg font-medium">{t('settings.services')}</h2>
@@ -309,9 +244,13 @@ export function SettingsPage() {
                                         {!p.configured
                                             ? t('settings.notConfigured', { label: p.label })
                                             : !p.connected
-                                              ? t('settings.connectToUse')
+                                              ? providerSupportsPlayback(p.provider)
+                                                  ? t('settings.connectToUse')
+                                                  : t('settings.connectToUseCatalog')
                                               : p.enabled
-                                                ? t('settings.activeHint')
+                                                ? providerSupportsPlayback(p.provider)
+                                                    ? t('settings.activeHint')
+                                                    : t('settings.activeHintCatalog')
                                                 : t('settings.inactiveHint')}
                                     </p>
                                 </div>
@@ -355,6 +294,108 @@ export function SettingsPage() {
                         );
                     })
                 )}
+            </section>
+
+            <section className="space-y-3">
+                <h2 className="text-lg font-medium">{t('settings.playback')}</h2>
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-3">
+                    <div className="min-w-0 flex-1">
+                        <p className="font-medium">{t('settings.favoriteSuggest')}</p>
+                        <p className="mt-1 text-sm text-muted">
+                            {t('settings.favoriteSuggestBody')}
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Label htmlFor="favorite-suggest" className="text-sm text-muted">
+                            {t('common.active')}
+                        </Label>
+                        <Switch
+                            id="favorite-suggest"
+                            checked={favoriteSuggest}
+                            aria-label={t('settings.favoriteSuggestAria')}
+                            onCheckedChange={(next) => {
+                                setFavoriteSuggest(next);
+                                setFavoriteSuggestEnabled(next);
+                            }}
+                        />
+                    </div>
+                </div>
+                {PARTY_MODE_VISIBLE ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-3">
+                    <div className="min-w-0 flex-1">
+                        <p className="font-medium">{t('settings.party')}</p>
+                        <p className="mt-1 text-sm text-muted">
+                            {t('settings.partyBody')}
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Label htmlFor="party-mode" className="text-sm text-muted">
+                            {t('common.active')}
+                        </Label>
+                        <Switch
+                            id="party-mode"
+                            checked={partyMode}
+                            aria-label={t('settings.partyAria')}
+                            onCheckedChange={(next) => {
+                                setPartyMode(next);
+                                setPartyModeEnabled(next);
+                            }}
+                        />
+                    </div>
+                </div>
+                ) : null}
+            </section>
+
+            <section className="space-y-3">
+                <h2 className="text-lg font-medium">{t('language.label')}</h2>
+                <p className="text-sm text-muted">{t('language.description')}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                        type="button"
+                        variant={locale === 'de' ? 'accent' : 'outline'}
+                        onClick={() => setLocale('de')}
+                    >
+                        {t('language.de')}
+                    </Button>
+                    <Button
+                        type="button"
+                        variant={locale === 'en' ? 'accent' : 'outline'}
+                        onClick={() => setLocale('en')}
+                    >
+                        {t('language.en')}
+                    </Button>
+                </div>
+            </section>
+
+            <section className="space-y-3">
+                <h2 className="text-lg font-medium">{t('settings.appearance')}</h2>
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-3">
+                    <div className="min-w-0 flex-1">
+                        <p className="font-medium">{t('settings.carmine')}</p>
+                        <p className="mt-1 text-sm text-muted">
+                            {t('settings.carmineBody')}
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Label htmlFor="carmine-mode" className="text-sm text-muted">
+                            {t('common.active')}
+                        </Label>
+                        <Switch
+                            id="carmine-mode"
+                            checked={carmineMode}
+                            aria-label={t('settings.carmineAria')}
+                            onCheckedChange={(next) => {
+                                setCarmineMode(next);
+                                setCarmineModeEnabled(next);
+                            }}
+                        />
+                    </div>
+                </div>
+                <p className="text-sm text-muted">{t('accent.description')}</p>
+                <div className="rounded-2xl border border-line bg-surface px-3 py-3">
+                    <p className="font-medium">{t('accent.label')}</p>
+                    <AccentColorControls className="mt-3" />
+                </div>
             </section>
         </div>
     );

@@ -164,18 +164,39 @@ class TidalService
     {
         $token = $this->getClientCredentialsToken();
         $country = $this->countryCode();
-        $encoded = rawurlencode($query);
+        $term = trim($query);
+        if ($term === '') {
+            return [];
+        }
 
-        $response = Http::withToken($token)
-            ->accept('application/vnd.api+json')
-            ->get(self::API_URL.'/searchResults/'.$encoded, [
-                'countryCode' => $country,
-                'include' => 'tracks,tracks.artists,tracks.albums,tracks.albums.coverArt',
-                'explicitFilter' => 'INCLUDE',
-            ]);
+        // TIDAL retired GET /searchResults/{query} (free-text as resource id).
+        // Current catalog search is a collection: GET /searchResults?filter[query]=…
+        $queryParams = [
+            'filter[query]' => Str::limit($term, 256, ''),
+            'countryCode' => $country,
+            'explicitFilter' => 'INCLUDE',
+        ];
+        $includes = [
+            'tracks,artists,albums,tracks.artists,tracks.albums,tracks.albums.coverArt',
+            'tracks,artists,albums,tracks.artists,tracks.albums',
+            'tracks,artists,albums',
+        ];
 
-        if ($response->failed()) {
-            throw new RuntimeException('TIDAL search failed: '.$response->body());
+        $response = null;
+        foreach ($includes as $include) {
+            $response = Http::withToken($token)
+                ->accept('application/vnd.api+json')
+                ->get(self::API_URL.'/searchResults', [
+                    ...$queryParams,
+                    'include' => $include,
+                ]);
+            if ($response->successful()) {
+                break;
+            }
+        }
+
+        if ($response === null || $response->failed()) {
+            throw new RuntimeException('TIDAL search failed: '.($response?->body() ?? 'empty response'));
         }
 
         $payload = $response->json();
@@ -185,9 +206,14 @@ class TidalService
         $albumsById = $included->where('type', 'albums')->keyBy('id');
         $artworksById = $included->where('type', 'artworks')->keyBy('id');
 
-        $trackRefs = data_get($payload, 'data.relationships.tracks.data', []);
-        if (! is_array($trackRefs)) {
-            $trackRefs = [];
+        $searchResult = $payload['data'] ?? null;
+        if (is_array($searchResult) && array_is_list($searchResult)) {
+            $searchResult = $searchResult[0] ?? null;
+        }
+
+        $trackRefs = data_get($searchResult, 'relationships.tracks.data', []);
+        if (! is_array($trackRefs) || $trackRefs === []) {
+            $trackRefs = $tracksById->keys()->map(fn ($id) => ['id' => $id])->all();
         }
 
         $results = [];
@@ -216,7 +242,8 @@ class TidalService
 
             $albumId = (string) data_get($track, 'relationships.albums.data.0.id', '');
             $album = $albumId !== '' ? $albumsById->get($albumId) : null;
-            $albumArt = $this->resolveCoverArtUrl(is_array($album) ? $album : null, $artworksById);
+            $albumArt = $this->resolveCoverArtUrl($track, $artworksById)
+                ?? $this->resolveCoverArtUrl(is_array($album) ? $album : null, $artworksById);
 
             $results[] = [
                 'id' => $id,
@@ -225,10 +252,11 @@ class TidalService
                 'artist' => $artistNames !== '' ? $artistNames : 'Unbekannt',
                 'album_art_url' => $albumArt,
                 'duration_ms' => $this->parseIsoDurationMs(data_get($track, 'attributes.duration')),
+                'album_id' => $albumId !== '' ? $albumId : null,
             ];
         }
 
-        return $results;
+        return $this->fillMissingTidalCovers($token, $results);
     }
 
     /**
@@ -334,7 +362,8 @@ class TidalService
 
                 $albumId = (string) data_get($track, 'relationships.albums.data.0.id', '');
                 $album = $albumId !== '' ? $albumsById->get($albumId) : null;
-                $albumArt = $this->resolveCoverArtUrl(is_array($album) ? $album : null, $artworksById);
+                $albumArt = $this->resolveCoverArtUrl($track, $artworksById)
+                    ?? $this->resolveCoverArtUrl(is_array($album) ? $album : null, $artworksById);
 
                 $tracks[] = [
                     'id' => (string) $id,
@@ -342,6 +371,7 @@ class TidalService
                     'name' => (string) data_get($track, 'attributes.title', 'Track'),
                     'artist' => $artistNames !== '' ? $artistNames : 'Unbekannt',
                     'album_art_url' => $albumArt,
+                    'album_id' => $albumId !== '' ? $albumId : null,
                 ];
             }
 
@@ -357,22 +387,16 @@ class TidalService
             }
         } while ($cursor);
 
-        return $tracks;
+        return $this->fillMissingTidalCovers($token, $tracks);
     }
 
     /**
-     * Playback is handled by the TIDAL Web Player SDK on the client.
+     * In-app TIDAL playback runs in the browser SDK. This endpoint stays for API
+     * compatibility and is unused.
      */
     public function playUri(User $user, string $uri, string $deviceId, int $positionMs = 0): void
     {
-        if (! str_starts_with($uri, 'tidal:track:')) {
-            throw new RuntimeException(
-                'Dieser Track ist kein TIDAL-Titel (erwartete URI tidal:track:…).'
-            );
-        }
-
-        // Ensure the user still has a valid token before client-side playback.
-        $this->getAccessToken($user);
+        throw new RuntimeException('TIDAL-Wiedergabe läuft lokal im Web-SDK, nicht über diesen Endpoint.');
     }
 
     public function isConfigured(): bool
@@ -383,6 +407,83 @@ class TidalService
     public function publicClientId(): string
     {
         return $this->clientId();
+    }
+
+    /**
+     * @param  list<array{id: string, uri: string, name: string, artist: string, album_art_url: string|null, duration_ms?: int|null, album_id?: string|null}>  $rows
+     * @return list<array{id: string, uri: string, name: string, artist: string, album_art_url: string|null, duration_ms?: int|null}>
+     */
+    private function fillMissingTidalCovers(string $token, array $rows): array
+    {
+        $missingAlbumIds = collect($rows)
+            ->filter(fn (array $row) => empty($row['album_art_url']) && filled($row['album_id'] ?? null))
+            ->pluck('album_id')
+            ->unique()
+            ->values()
+            ->all();
+
+        $coversByAlbumId = $this->fetchAlbumCoverUrls($token, $missingAlbumIds);
+
+        return array_map(function (array $row) use ($coversByAlbumId) {
+            if (empty($row['album_art_url'])) {
+                $albumId = (string) ($row['album_id'] ?? '');
+                $row['album_art_url'] = $coversByAlbumId[$albumId] ?? null;
+            }
+            unset($row['album_id']);
+
+            return $row;
+        }, $rows);
+    }
+
+    /**
+     * @param  list<string>  $albumIds
+     * @return array<string, string>
+     */
+    private function fetchAlbumCoverUrls(string $token, array $albumIds): array
+    {
+        $albumIds = array_values(array_unique(array_filter($albumIds)));
+        if ($albumIds === []) {
+            return [];
+        }
+
+        $covers = [];
+        foreach (array_chunk($albumIds, 20) as $chunk) {
+            $response = Http::withToken($token)
+                ->accept('application/vnd.api+json')
+                ->get(self::API_URL.'/albums', [
+                    'filter[id]' => implode(',', $chunk),
+                    'include' => 'coverArt',
+                    'countryCode' => $this->countryCode(),
+                ]);
+
+            if ($response->failed()) {
+                continue;
+            }
+
+            $payload = $response->json();
+            $included = collect($payload['included'] ?? []);
+            $artworksById = $included->where('type', 'artworks')->keyBy('id');
+            $albums = $payload['data'] ?? [];
+            if (! is_array($albums)) {
+                continue;
+            }
+
+            foreach ($albums as $album) {
+                if (! is_array($album)) {
+                    continue;
+                }
+                $id = (string) ($album['id'] ?? '');
+                if ($id === '') {
+                    continue;
+                }
+                $url = $this->resolveCoverArtUrl($album, $artworksById);
+                if ($url !== null) {
+                    $covers[$id] = $url;
+                }
+            }
+        }
+
+        return $covers;
     }
 
     /**
@@ -399,24 +500,47 @@ class TidalService
             return null;
         }
 
-        $coverRefs = data_get($resource, 'relationships.coverArt.data', []);
-        if (! is_array($coverRefs)) {
-            return null;
-        }
-
+        $coverRefs = $this->relationshipData(data_get($resource, 'relationships.coverArt.data'));
         foreach ($coverRefs as $coverRef) {
             $artworkId = (string) ($coverRef['id'] ?? '');
             if ($artworkId === '') {
                 continue;
             }
             $artwork = $artworksById->get($artworkId);
-            $url = $this->extractImageUrl(is_array($artwork) ? $artwork : null);
+            $url = $this->extractImageUrl(is_array($artwork) ? $artwork : null)
+                ?? $this->artworkCdnUrlFromId($artworkId);
             if ($url !== null) {
                 return $url;
             }
         }
 
         return null;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function relationshipData(mixed $data): array
+    {
+        if (! is_array($data) || $data === []) {
+            return [];
+        }
+        if (isset($data['id'])) {
+            return [$data];
+        }
+
+        return array_values(array_filter($data, 'is_array'));
+    }
+
+    private function artworkCdnUrlFromId(string $id): ?string
+    {
+        if (! preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $id)) {
+            return null;
+        }
+
+        $path = str_replace('-', '/', strtolower($id));
+
+        return 'https://resources.tidal.com/images/'.$path.'/640x640.jpg';
     }
 
     private function extractImageUrl(?array $resource): ?string

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { MoreHorizontal, Pause, Play, Pencil, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import api from '@/lib/api';
 import type { Song, SongStats } from '@/types';
 import { useAuth } from '@/context/auth-context';
 import { usePlayer } from '@/context/player-context';
-import { hasMusicConnected, providerLabel } from '@/lib/music';
+import { hasPlaybackConnected } from '@/lib/music';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Alert } from '@/components/ui/alert';
 import {
     DropdownMenu,
@@ -20,12 +19,12 @@ import { SyncedLyrics } from '@/components/SyncedLyrics';
 import { AddToPlaylist } from '@/components/AddToPlaylist';
 import { FavoriteButton } from '@/components/FavoriteButton';
 import { SongPlayStats } from '@/components/SongPlayStats';
-import { songIsPlayable, songProviderLinks, songToPlayerTrack } from '@/lib/playable';
+import { SongPlayButton, SongProviderBadges } from '@/components/SongPlayButton';
+import { songIsPlayable, songMatchesTrack, songToPlayerTrack } from '@/lib/playable';
 import { subscribeFavoriteChange } from '@/lib/favorite-sync';
 import { invalidateSongListCache } from '@/lib/song-list-cache';
 import { ArtistLinks } from '@/components/ArtistLinks';
 import { SongShowSkeleton } from '@/components/skeletons';
-import { cn } from '@/lib/utils';
 import { AppTooltip } from '@/components/ui/tooltip';
 import { useI18n } from '@/context/locale-context';
 
@@ -43,7 +42,7 @@ const emptyStats = (): SongStats => ({
 export function SongShowPage() {
     const { id } = useParams();
     const { user } = useAuth();
-    const { track, playing, playTrack, toggle, clearPlayback } = usePlayer();
+    const { track, playing, clearPlayback } = usePlayer();
     const navigate = useNavigate();
     const { t } = useI18n();
     const [song, setSong] = useState<Song | null>(null);
@@ -125,34 +124,8 @@ export function SongShowPage() {
 
     const playableTrack = songToPlayerTrack(song, user);
     const playable = songIsPlayable(song);
-    const links = songProviderLinks(song);
-    const preferred = song.preferred_provider ?? song.provider;
-    const uri = playableTrack?.uri ?? null;
-    const isCurrent = Boolean(uri && track?.uri === uri) || track?.songId === song.id;
-    const isPlayingHere = isCurrent && playing;
-
-    const onPlay = async () => {
-        if (!playable || !playableTrack) {
-            return;
-        }
-
-        if (!user) {
-            navigate('/login');
-            return;
-        }
-
-        if (!hasMusicConnected(user)) {
-            navigate('/settings');
-            return;
-        }
-
-        if (isCurrent) {
-            await toggle();
-            return;
-        }
-
-        await playTrack(playableTrack);
-    };
+    const isCurrent = songMatchesTrack(song, track);
+    const uri = isCurrent && track?.uri ? track.uri : (playableTrack?.uri ?? null);
 
     return (
         <article className="space-y-8">
@@ -177,41 +150,12 @@ export function SongShowPage() {
                         <p className="mt-1 truncate text-lg text-muted">
                             <ArtistLinks artists={song.artists} artist={song.artist} />
                         </p>
-                        {links.length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-1">
-                                {links.map((link) => (
-                                    <Badge
-                                        key={link.provider}
-                                        className={cn(
-                                            link.provider === preferred &&
-                                                'border-accent/20 bg-accent/10 text-accent',
-                                        )}
-                                    >
-                                        {providerLabel(link.provider)}
-                                        {link.provider === preferred ? t('songs.preferredSuffix') : ''}
-                                    </Badge>
-                                ))}
-                            </div>
-                        )}
+                        <SongProviderBadges song={song} className="mt-2 justify-start" showPreferredHint />
                     </div>
                 </div>
 
                 <div className="flex shrink-0 flex-nowrap items-center gap-2">
-                    {playable && (
-                        <AppTooltip
-                            label={isPlayingHere ? t('common.pause') : isCurrent ? t('common.resume') : t('common.play')}
-                        >
-                            <Button
-                                type="button"
-                                variant="accent"
-                                size="icon"
-                                onClick={() => void onPlay()}
-                                aria-label={isPlayingHere ? t('common.pause') : isCurrent ? t('common.resume') : t('common.play')}
-                            >
-                                {isPlayingHere ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                            </Button>
-                        </AppTooltip>
-                    )}
+                    <SongPlayButton song={song} />
                     {user && (
                         <FavoriteButton
                             songId={song.id}
@@ -274,7 +218,7 @@ export function SongShowPage() {
                     {t('songs.andConnect')}
                 </Alert>
             )}
-            {playable && user && !hasMusicConnected(user) && (
+            {playable && user && !hasPlaybackConnected(user) && (
                 <Alert>
                     {t('songs.noService')}{' '}
                     <Link className="font-medium underline underline-offset-2" to="/settings">

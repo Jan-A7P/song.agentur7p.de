@@ -16,6 +16,8 @@ export interface MusicProvider {
     play(track: PlayableTrack, positionMs?: number): Promise<void>;
     pause(): Promise<void>;
     resume(): Promise<void>;
+    /** Pause and mute so this provider cannot emit audio while another provider is owner. */
+    silence(): Promise<void>;
     seek(ms: number): Promise<void>;
     setVolume(volume: number): Promise<void>;
     getCurrentState(): Promise<ProviderPlaybackState | null>;

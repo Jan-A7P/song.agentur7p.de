@@ -28,7 +28,17 @@ export default defineConfig({
         },
     },
     optimizeDeps: {
-        include: ['shaka-player', '@tidal-music/player', '@tidal-music/event-producer'],
+        include: [
+            '@tidal-music/auth',
+            '@tidal-music/player',
+            '@tidal-music/player-web-components',
+            '@tidal-music/event-producer',
+            'three',
+            'three/addons/postprocessing/EffectComposer.js',
+            'three/addons/postprocessing/RenderPass.js',
+            'three/addons/postprocessing/ShaderPass.js',
+            'three/addons/postprocessing/UnrealBloomPass.js',
+        ],
     },
     server: {
         watch: {

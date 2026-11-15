@@ -17,7 +17,7 @@ import {
     type EditableLyricLine,
 } from '@/lib/lrc';
 import { usePlayer, formatTimePrecise } from '@/context/player-context';
-import { connectedProviderIds, providerLabel, providerTrackUri } from '@/lib/music';
+import { connectedProviderIds, providerLabel, providerSupportsPlayback, providerTrackUri } from '@/lib/music';
 import { songProviderLinks } from '@/lib/playable';
 import type { MusicProviderId } from '@/music/types';
 import type { ProviderTrack, Song, SongProviderLink } from '@/types';
@@ -88,6 +88,10 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
     const preferredLink = useMemo(
         () => links.find((l) => l.provider === preferredProvider) ?? links[0] ?? null,
         [links, preferredProvider],
+    );
+    const playbackLink = useMemo(
+        () => links.find((link) => providerSupportsPlayback(link.provider)) ?? null,
+        [links],
     );
 
     const activeProviders = useMemo(() => connectedProviderIds(user), [user]);
@@ -200,14 +204,14 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
     };
 
     const ensurePlaying = async () => {
-        if (!preferredLink) {
-            setError(t('form.linkTrackFirst'));
+        if (!playbackLink) {
+            setError(t('form.playNeedsSpotify'));
             return;
         }
 
         const playUri =
-            preferredLink.provider_uri ||
-            providerTrackUri(preferredLink.provider, preferredLink.provider_track_id);
+            playbackLink.provider_uri ||
+            providerTrackUri(playbackLink.provider, playbackLink.provider_track_id);
         const isCurrent = playerTrack?.uri === playUri;
         if (isCurrent) {
             if (!playing) {
@@ -217,12 +221,12 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
         }
 
         await playTrack({
-            provider: preferredLink.provider,
-            trackId: preferredLink.provider_track_id,
+            provider: playbackLink.provider,
+            trackId: playbackLink.provider_track_id,
             uri: playUri,
-            title: title || preferredLink.provider,
+            title: title || playbackLink.provider,
             artist: artist,
-            albumArtUrl: preferredLink.album_art_url ?? null,
+            albumArtUrl: playbackLink.album_art_url ?? null,
             songId: initial?.id,
             lyrics: timingMode ? serializeEditableLines(lines) : lyrics,
         }, { radio: false });
@@ -515,7 +519,7 @@ export function SongForm({ initial, submitLabel, onSubmit }: Props) {
                                 </p>
                             </div>
                             <Button type="button" size="sm" variant="accent" onClick={() => void ensurePlaying()}>
-                                {playerTrack?.uri === preferredLink?.provider_uri && playing ? (
+                                {playerTrack?.uri === playbackLink?.provider_uri && playing ? (
                                     <>
                                         <Pause className="h-4 w-4" /> {t('common.pause')}
                                     </>

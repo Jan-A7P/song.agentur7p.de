@@ -27,8 +27,8 @@
     --ink: #1a1714;
     --paper: #f7f3ec;
     --paper-2: #efe8dc;
-    --accent: #c45c26;
-    --accent-soft: #e8a57a;
+    --accent: #d65de9;
+    --accent-soft: color-mix(in oklab, var(--accent) 46%, white);
     --muted: #6b645a;
     --line: #d9d0c3;
     --success: #2f6b4f;
@@ -44,8 +44,8 @@
     --ink: #f2ebe2;
     --paper: #14110f;
     --paper-2: #1f1b17;
-    --accent: #e07a45;
-    --accent-soft: #a85a35;
+    --accent: #d65de9;
+    --accent-soft: color-mix(in oklab, var(--accent) 62%, black);
     --muted: #a89f93;
     --line: #3a342e;
     --success: #6aad88;
@@ -58,9 +58,46 @@
     color-scheme: dark;
 }
 
+html[data-accent] {
+    --accent-soft: color-mix(in oklab, var(--accent) 46%, white);
+}
+
+html.dark[data-accent] {
+    --accent-soft: color-mix(in oklab, var(--accent) 62%, black);
+}
+
+html.carmine {
+    --ink: #2a1014;
+    --paper: #f6e8ea;
+    --paper-2: #edd6da;
+    --muted: #8a5a62;
+    --line: #ddc4c8;
+    --danger: #dc2626;
+    --danger-soft: #f8dce0;
+    --surface: color-mix(in oklab, white 55%, transparent);
+    --glow-a: color-mix(in oklab, var(--accent-soft) 40%, transparent);
+    --glow-b: color-mix(in oklab, var(--paper-2) 90%, #e8b8c0);
+    --player-shadow: 0 -12px 40px rgba(42, 16, 20, 0.12);
+}
+
+html.dark.carmine {
+    --ink: #f4e6e8;
+    --paper: #14080a;
+    --paper-2: #221014;
+    --muted: #c49aa0;
+    --line: #4a242c;
+    --danger: #f0a0a0;
+    --danger-soft: #3a1f1c;
+    --surface: color-mix(in oklab, white 6%, transparent);
+    --glow-a: color-mix(in oklab, var(--accent) 22%, transparent);
+    --glow-b: color-mix(in oklab, #2a1418 80%, #3a1018);
+    --player-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+}
+
 @layer base {
     html {
         color-scheme: light;
+        accent-color: var(--accent);
     }
 
     html.dark {
@@ -355,6 +392,80 @@ html.party .party-player-bar {
     animation: party-player-glow 1.2s ease-in-out infinite alternate;
 }
 
+@keyframes carmine-glow {
+    0%,
+    100% {
+        opacity: 0.72;
+        transform: scaleX(1);
+    }
+    40% {
+        opacity: 1;
+        transform: scaleX(1.04);
+    }
+    70% {
+        opacity: 0.8;
+        transform: scaleX(0.97);
+    }
+}
+
+@keyframes carmine-icon-flicker {
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    40% {
+        transform: scale(1.12);
+        opacity: 0.82;
+    }
+    70% {
+        transform: scale(0.96);
+        opacity: 1;
+    }
+}
+
+.carmine-fire {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: calc(var(--player-bar-height, 5.75rem) + min(64vh, 36rem));
+    z-index: 42;
+    overflow: hidden;
+    pointer-events: none;
+    mask-image: linear-gradient(to top, #000 0%, #000 58%, transparent 100%);
+}
+
+.carmine-fire__canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.carmine-fire__glow {
+    position: absolute;
+    inset: 28% 0 -18%;
+    background:
+        radial-gradient(ellipse 100% 80% at 50% 100%, rgb(150 0 24 / 0.28), transparent 72%),
+        radial-gradient(ellipse 70% 60% at 20% 100%, rgb(88 8 16 / 0.18), transparent 70%),
+        radial-gradient(ellipse 70% 60% at 80% 100%, rgb(88 8 16 / 0.18), transparent 70%);
+    animation: carmine-glow 3.4s ease-in-out infinite;
+    transform-origin: 50% 100%;
+}
+
+.dark .carmine-fire__glow {
+    background:
+        radial-gradient(ellipse 100% 86% at 50% 100%, rgb(150 0 24 / 0.4), transparent 74%),
+        radial-gradient(ellipse 70% 64% at 18% 100%, rgb(72 6 12 / 0.28), transparent 70%),
+        radial-gradient(ellipse 70% 64% at 82% 100%, rgb(72 6 12 / 0.28), transparent 70%);
+}
+
+.carmine-toggle-flame {
+    animation: carmine-icon-flicker 1.1s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
     html.party body,
     html.party .party-cover-glow,
@@ -371,6 +482,15 @@ html.party .party-player-bar {
     .party-lights__flash {
         display: none;
     }
+
+    .carmine-fire__glow,
+    .carmine-toggle-flame {
+        animation: none;
+    }
+
+    .carmine-fire__canvas {
+        display: none;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -381,4 +501,26 @@ html.party .party-player-bar {
     .lyric-fs-stage > * {
         transition: none !important;
     }
+}
+
+.color-picker .react-colorful {
+    width: 100% !important;
+    height: 168px !important;
+}
+
+.color-picker .react-colorful__saturation {
+    border-radius: 0.6rem;
+    border-bottom: none;
+}
+
+.color-picker .react-colorful__hue {
+    height: 10px;
+    margin-top: 10px;
+    border-radius: 999px;
+}
+
+.color-picker .react-colorful__pointer {
+    width: 15px;
+    height: 15px;
+    border-width: 2px;
 }

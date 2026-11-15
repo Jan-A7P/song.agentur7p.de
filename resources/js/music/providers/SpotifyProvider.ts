@@ -230,6 +230,19 @@ export class SpotifyProvider implements MusicProvider {
         await this.player?.resume();
     }
 
+    async silence(): Promise<void> {
+        try {
+            await this.player?.pause();
+        } catch {
+            // ignore
+        }
+        try {
+            await this.setVolume(0);
+        } catch {
+            // ignore
+        }
+    }
+
     async seek(ms: number): Promise<void> {
         await this.player?.seek(ms);
     }

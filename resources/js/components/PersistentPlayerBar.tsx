@@ -26,7 +26,7 @@ import { usePlayer, formatTime } from '@/context/player-context';
 import { useAuth } from '@/context/auth-context';
 import { useRoom } from '@/context/room-context';
 import { findActiveLrcIndex, parseLrc } from '@/lib/lrc';
-import { hasMusicConnected, isProviderConnected, providerLabel } from '@/lib/music';
+import { hasPlaybackConnected, isPlaybackProviderConnected, providerLabel } from '@/lib/music';
 import api from '@/lib/api';
 import type { Song } from '@/types';
 import type { MusicProviderId } from '@/music/types';
@@ -374,7 +374,7 @@ export function PersistentPlayerBar() {
     }, [lyricsFullscreen]);
 
     useEffect(() => {
-        if (!track || !hasMusicConnected(user)) {
+        if (!track || !hasPlaybackConnected(user)) {
             return;
         }
 
@@ -429,7 +429,7 @@ export function PersistentPlayerBar() {
         }
         return track.providerLinks
             .map((l) => l.provider)
-            .filter((id) => isProviderConnected(user, id));
+            .filter((id) => isPlaybackProviderConnected(user, id));
     }, [track?.providerLinks, user]);
 
     const lyricsSource = fetchedLyrics ?? (typeof track?.lyrics === 'string' ? track.lyrics : null);
@@ -504,7 +504,7 @@ export function PersistentPlayerBar() {
         };
     }, []);
 
-    if (!hasMusicConnected(user) || !track) {
+    if (!hasPlaybackConnected(user) || !track) {
         return null;
     }
 
